@@ -1,8 +1,8 @@
-# Daikin Air for Omarchy
+# Omarchy Daikin Control via Home Assistant
 
-Daikin Air puts your Home Assistant climate entity in the Omarchy bar: see the
-room temperature, compare it with the target, adjust the set point, and turn
-the air conditioner on or off without opening a dashboard.
+Daikin Air puts your Home Assistant Daikin climate entity in the Omarchy bar:
+see the room temperature, compare it with the target, adjust the set point,
+and turn the air conditioner on or off without opening a dashboard.
 
 The widget talks to Home Assistant's local REST API. It does not talk directly
 to a Daikin unit or replace the Home Assistant Daikin integration. That makes

@@ -5,7 +5,7 @@
   "version": "2.1.1",
   "author": "Sai",
   "license": "MIT",
-  "description": "A polished Omarchy bar control for Home Assistant climate entities, with optional local server setup, advanced controls, and temperature history.",
+  "description": "Control a Daikin AC from Omarchy through Home Assistant, with optional local server setup, advanced controls, and temperature history.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Daikin Air",
-    "description": "See temperatures, switch power, and adjust one Home Assistant climate entity from the bar.",
+    "description": "Control one Home Assistant Daikin climate entity from the Omarchy bar.",
     "category": "Home",
     "aliases": [
       "daikin",
