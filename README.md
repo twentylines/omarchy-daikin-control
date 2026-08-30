@@ -15,7 +15,7 @@ Review the source before enabling it. Omarchy plugins run as unsandboxed code
 inside the long-lived `omarchy-shell` process.
 
 ```bash
-omarchy plugin add https://github.com/twentylines/omarchy-homeassistant-ac.git --enable
+omarchy plugin add https://github.com/twentylines/omarchy-ha-daikin.git --enable
 ```
 
 The plugin ships its small Python helper and needs only `python3`, which is
@@ -141,7 +141,7 @@ stops. Power changes remain visibly pending while Home Assistant settles, with
 a final state check after 15 seconds if the controller is slow to report.
 
 The project page has setup help, Home Assistant notes, and future tutorials:
-[github.com/twentylines/omarchy-homeassistant-ac](https://github.com/twentylines/omarchy-homeassistant-ac).
+[github.com/twentylines/omarchy-ha-daikin](https://github.com/twentylines/omarchy-ha-daikin).
 Daikin Air is made by Sai.
 
 ## Requirements
