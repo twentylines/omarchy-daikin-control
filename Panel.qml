@@ -71,6 +71,10 @@ Panel {
   property bool resetAppBusy: false
   property string resetAppMessage: ""
   property string resetAppError: ""
+  property bool turnOffAllConfirming: false
+  property bool turnOffAllBusy: false
+  property string turnOffAllMessage: ""
+  property string turnOffAllError: ""
   property bool advancedControls: false
   property bool preferenceBusy: false
   property string preferenceKind: ""
@@ -122,6 +126,7 @@ Panel {
     && !preferenceBusy
     && !localServerBusy
     && !resetAppBusy
+    && !turnOffAllBusy
     && String(setupUrl || "").trim() !== ""
     && String(setupToken || "").trim() !== ""
     && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
@@ -138,7 +143,8 @@ Panel {
   readonly property bool hasLocalTarget: localTarget !== null && isFinite(Number(localTarget))
   readonly property var targetValue: hasLocalTarget ? Number(localTarget) : reading.target
   readonly property string targetText: connected ? temperature(targetValue) : "..."
-  readonly property bool otherActionBusy: actionProcess.running && actionKind !== "temperature"
+  readonly property bool otherActionBusy: turnOffAllBusy
+    || (actionProcess.running && actionKind !== "temperature")
   readonly property string activeMode: localMode !== "" ? localMode : String(reading.state || "")
   readonly property string activeFanMode: localFanMode !== ""
     ? localFanMode : String(reading.fan_mode || "")
@@ -403,7 +409,7 @@ Panel {
 
   function refreshStatus() {
     if (statusProcess.running || actionProcess.running || setupProcess.running
-        || preferenceProcess.running) return false
+        || preferenceProcess.running || turnOffAllProcess.running) return false
     statusProcess.command = ["python3", root.helperPath, "status"]
     statusProcess.running = true
     return true
@@ -544,6 +550,59 @@ Panel {
     resetAppMessage = ""
     resetAppProcess.command = ["python3", root.helperPath, "reset-app"]
     resetAppProcess.running = true
+  }
+
+  function confirmTurnOffAll() {
+    if (turnOffAllBusy) return
+    if (!turnOffAllConfirming) {
+      turnOffAllError = ""
+      turnOffAllMessage = ""
+      turnOffAllConfirming = true
+      turnOffAllConfirmTimer.restart()
+      return
+    }
+    turnOffAllConfirmTimer.stop()
+    if (setupProcess.running || localServerProcess.running || preferenceProcess.running
+        || resetAppProcess.running || actionProcess.running || statusProcess.running
+        || configProcess.running || entitiesProcess.running) {
+      turnOffAllConfirming = false
+      turnOffAllError = "Wait for the current control request to finish, then try again."
+      return
+    }
+    turnOffAllBusy = true
+    turnOffAllConfirming = false
+    turnOffAllError = ""
+    turnOffAllMessage = ""
+    turnOffAllProcess.command = ["python3", root.helperPath, "turn-off-all"]
+    turnOffAllProcess.running = true
+  }
+
+  function applyTurnOffAllResult(raw) {
+    var text = String(raw || "").trim()
+    if (text === "") {
+      turnOffAllError = "The household power request returned no data."
+      return
+    }
+    try {
+      var parsed = JSON.parse(text)
+      if (parsed && parsed.ok === true) {
+        var count = Number(parsed.count)
+        turnOffAllError = ""
+        turnOffAllConfirming = false
+        turnOffAllMessage = "Turn-off sent to " + (isFinite(count) ? count : 0)
+          + (count === 1 ? " climate device." : " climate devices.")
+        root.clearLocalPower()
+        root.clearLocalClimateControls()
+        localTarget = null
+        lastTemperatureSent = null
+        errorText = ""
+        return
+      }
+      turnOffAllError = parsed && parsed.error
+        ? String(parsed.error) : "Home Assistant could not turn off all climate devices."
+    } catch (e) {
+      turnOffAllError = "The household power request returned invalid data."
+    }
   }
 
   function applyResetAppResult(raw) {
@@ -887,7 +946,7 @@ Panel {
 
   function requestMode(value) {
     var next = String(value || "").trim()
-    if (!next || !connected || (!isOn && localMode === "")) return
+    if (turnOffAllBusy || !next || !connected || (!isOn && localMode === "")) return
     if (sameControlValue(next, activeMode) && localMode === "") return
     localMode = next
     root.beginModeRestart()
@@ -901,7 +960,7 @@ Panel {
 
   function requestFanMode(value) {
     var next = String(value || "").trim()
-    if (!next || !connected || !isOn) return
+    if (turnOffAllBusy || !next || !connected || !isOn) return
     if (sameControlValue(next, activeFanMode) && localFanMode === "") return
     localFanMode = next
     errorText = ""
@@ -1049,7 +1108,8 @@ Panel {
   }
 
   function adjustTarget(direction) {
-    if (!connected || !isOn || targetValue === null || targetValue === undefined) return
+    if (turnOffAllBusy || !connected || !isOn
+        || targetValue === null || targetValue === undefined) return
     var next = normalizeTarget(Number(targetValue) + direction * temperatureStep)
     if (next === null) return
     localTarget = next
@@ -1057,7 +1117,7 @@ Panel {
   }
 
   function previewTarget(value) {
-    if (!connected || !isOn) return
+    if (turnOffAllBusy || !connected || !isOn) return
     var next = normalizeTarget(value)
     if (next === null) return
     localTarget = next
@@ -1069,7 +1129,7 @@ Panel {
   }
 
   function commitPendingTemperature() {
-    if (!connected || !isOn || !hasLocalTarget) return
+    if (turnOffAllBusy || !connected || !isOn || !hasLocalTarget) return
     var value = Number(localTarget)
     if (!isFinite(value)) return
     if (temperatureInFlight !== null || actionProcess.running) return
@@ -1102,12 +1162,12 @@ Panel {
   }
 
   function togglePower() {
-    if (actionProcess.running || !connected || hasLocalPower || modeRestarting) return
+    if (turnOffAllBusy || actionProcess.running || !connected || hasLocalPower || modeRestarting) return
     root.requestPower(isOn ? "off" : "on", true)
   }
 
   function cancelPower() {
-    if (!connected || !hasLocalPower || !powerCanCancel) return
+    if (turnOffAllBusy || !connected || !hasLocalPower || !powerCanCancel) return
     root.requestPower(localPower ? "off" : "on", false)
   }
 
@@ -1163,6 +1223,29 @@ Panel {
       onStreamFinished: if (String(text || "").trim() !== "") console.warn("homeassistant-ac-reset", text.trim())
     }
     onExited: root.resetAppBusy = false
+  }
+
+  Process {
+    id: turnOffAllProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyTurnOffAllResult(text)
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("homeassistant-ac-all-off", text.trim())
+    }
+    onExited: {
+      root.turnOffAllBusy = false
+      Qt.callLater(root.refresh)
+    }
+  }
+
+  Timer {
+    id: turnOffAllConfirmTimer
+    interval: 5000
+    repeat: false
+    onTriggered: root.turnOffAllConfirming = false
   }
 
   Process {
@@ -1288,7 +1371,7 @@ Panel {
         root.errorText = "The AC did not come back on after switching modes. Try TURN ON to retry."
         return
       }
-      if (!root.actionProcess.running && !root.statusProcess.running) root.refreshStatus()
+      if (!actionProcess.running && !statusProcess.running) root.refreshStatus()
     }
   }
 
@@ -2788,7 +2871,7 @@ Panel {
             text: root.isOn ? "TURN OFF" : "TURN ON"
             fontSize: Style.font.bodySmall
             enabled: root.connected && !root.actionBusy
-              && !root.hasLocalPower && !root.modeRestarting
+              && !root.turnOffAllBusy && !root.hasLocalPower && !root.modeRestarting
             fontFamily: root.fontFamily
             foreground: root.isOn ? Color.accent : root.foreground
             accent: Color.accent
@@ -2947,7 +3030,8 @@ Panel {
                   accent: Color.accent
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
-                  enabled: root.connected && (root.isOn || root.localMode !== "") && !root.actionBusy
+                  enabled: root.connected && (root.isOn || root.localMode !== "")
+                    && !root.actionBusy && !root.turnOffAllBusy
                   onChanged: function(value) { root.requestMode(value) }
                 }
 
@@ -2966,9 +3050,107 @@ Panel {
                   accent: Color.accent
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
-                  enabled: root.connected && root.isOn && !root.actionBusy
+                  enabled: root.connected && root.isOn && !root.actionBusy && !root.turnOffAllBusy
                   onChanged: function(value) { root.requestFanMode(value) }
                 }
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: turnOffAllCard
+          visible: root.advancedControls && root.connected
+          width: parent.width
+          implicitHeight: turnOffAllForm.implicitHeight + Style.space(28)
+          radius: root.panelRadius
+          color: root.alpha(root.urgent, 0.035)
+          borderSpec: Border.flat(root.alpha(root.urgent, 0.24), 1)
+
+          Column {
+            id: turnOffAllForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(14)
+            spacing: Style.space(7)
+
+            Text {
+              width: parent.width
+              text: "HOUSEHOLD POWER"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "This affects every available Home Assistant climate device, including rooms not selected above."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              width: parent.width
+              height: Style.space(42)
+              text: root.turnOffAllBusy ? "TURNING OFF…"
+                : root.turnOffAllConfirming ? "SURE?" : "TURN OFF ALL ACs"
+              iconText: root.turnOffAllBusy || root.turnOffAllConfirming ? "" : "⏻"
+              iconSize: Style.font.body
+              fontSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              foreground: root.turnOffAllConfirming || root.turnOffAllBusy
+                ? Color.popups.background : root.urgent
+              accent: root.urgent
+              background: root.turnOffAllConfirming || root.turnOffAllBusy
+                ? root.urgent : root.alpha(root.urgent, 0.07)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.turnOffAllBusy && !actionProcess.running
+                && !statusProcess.running && !root.preferenceBusy && !root.setupBusy
+                && !root.localServerBusy && !root.resetAppBusy
+                && !configProcess.running && !entitiesProcess.running
+              tooltipText: root.turnOffAllConfirming
+                ? "Click again to turn off every available climate device"
+                : "Turn off every available Home Assistant climate device"
+              onClicked: root.confirmTurnOffAll()
+
+              LoadingRing {
+                visible: root.turnOffAllBusy
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(14)
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(16)
+                height: width
+                color: Color.popups.background
+                strokeWidth: Style.space(2)
+              }
+            }
+
+            BorderSurface {
+              visible: root.turnOffAllMessage !== "" || root.turnOffAllError !== ""
+              width: parent.width
+              implicitHeight: turnOffAllStatus.implicitHeight + Style.space(18)
+              color: root.alpha(root.turnOffAllError !== "" ? root.urgent : Color.accent, 0.09)
+              borderSpec: Border.flat(root.alpha(root.turnOffAllError !== "" ? root.urgent : Color.accent, 0.32), 1)
+              radius: root.compactRadius
+
+              Text {
+                id: turnOffAllStatus
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: root.turnOffAllError !== ""
+                  ? root.turnOffAllError : root.turnOffAllMessage
+                color: root.turnOffAllError !== "" ? root.urgent : Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
           }

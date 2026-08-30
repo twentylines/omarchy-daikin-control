@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sai.homeassistant-ac",
   "name": "Daikin Air",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "author": "Sai",
   "license": "MIT",
   "description": "Control a Daikin AC from Omarchy through Home Assistant, with optional local server setup, advanced controls, and temperature history.",

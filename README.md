@@ -23,6 +23,18 @@ available on a normal Omarchy install. It does not start a daemon or require a
 cloud account by default. An optional local Home Assistant setup is available
 below for computers that do not have a server yet.
 
+## Updating
+
+This plugin does not update itself in the background. When a new version is
+published, update the Git-managed install with:
+
+```bash
+omarchy plugin update sai.homeassistant-ac --yes
+```
+
+The updated files are pulled into the local plugin directory and Omarchy
+reloads them. If the new version does not appear, run `omarchy refresh shell`.
+
 ## First-run setup
 
 Click the Daikin Air glyph in the bar. The centered setup panel asks for:
@@ -139,6 +151,8 @@ to Home Assistant in the background.
 Temperature changes preview immediately and are committed after interaction
 stops. Power changes remain visibly pending while Home Assistant settles, with
 a final state check after 15 seconds if the controller is slow to report.
+
+See [PATCHNOTES.md](PATCHNOTES.md) for the project update history.
 
 The project page has setup help, Home Assistant notes, and future tutorials:
 [github.com/twentylines/omarchy-daikin-control](https://github.com/twentylines/omarchy-daikin-control).

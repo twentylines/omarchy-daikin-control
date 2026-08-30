@@ -17,7 +17,7 @@ Item {
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
 
-  implicitHeight: Style.space(224)
+  implicitHeight: Style.space(236)
   height: implicitHeight
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
@@ -70,16 +70,18 @@ Item {
 
     Column {
       anchors.fill: parent
-      anchors.margins: Style.space(14)
-      spacing: Style.space(5)
+      anchors.margins: Style.space(16)
+      spacing: Style.space(7)
 
       Row {
+        id: historyHeader
         width: parent.width
-        height: Math.max(historyTitle.implicitHeight, historyRange.implicitHeight)
+        height: historyHeaderColumn.implicitHeight
 
         Column {
+          id: historyHeaderColumn
           width: parent.width - historyRange.width - Style.space(8)
-          spacing: Style.space(1)
+          spacing: Style.space(2)
 
           Text {
             id: historyTitle
@@ -92,11 +94,12 @@ Item {
           }
 
           Text {
-            text: "LOCAL LOG · PC ACTIVE TO RECORD"
+            text: "LOCAL ONLY · PC MUST BE ACTIVE TO RECORD"
             color: Qt.darker(root.foreground, 1.6)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.letterSpacing: 0.35
+            elide: Text.ElideRight
           }
         }
 
@@ -110,17 +113,26 @@ Item {
           font.bold: true
           font.letterSpacing: 0.8
           horizontalAlignment: Text.AlignRight
+          anchors.verticalCenter: parent.verticalCenter
         }
       }
 
       Item {
         id: chartFrame
         width: parent.width
-        height: parent.height - parent.spacing - historyTitle.implicitHeight
+        height: Math.max(Style.space(132), parent.height - parent.spacing - historyHeader.height)
+
+        BorderSurface {
+          anchors.fill: parent
+          radius: root.panelRadius - Style.space(4)
+          color: root.alpha(root.foreground, 0.018)
+          borderSpec: Border.flat(root.alpha(root.foreground, 0.08), 1)
+        }
 
         Canvas {
           id: chart
           anchors.fill: parent
+          anchors.margins: Style.space(1)
           renderTarget: Canvas.Image
 
           function drawLabel(context, text, x, y, align) {
@@ -136,8 +148,8 @@ Item {
             var values = root.numericPoints()
             var left = Style.space(42)
             var right = Math.max(left + 20, width - Style.space(8))
-            var top = Style.space(7)
-            var bottom = Math.max(top + 20, height - Style.space(24))
+            var top = Style.space(12)
+            var bottom = Math.max(top + 20, height - Style.space(26))
             var plotWidth = right - left
             var plotHeight = bottom - top
             var now = Date.now() / 1000

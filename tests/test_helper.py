@@ -264,6 +264,53 @@ class HelperTests(unittest.TestCase):
         finally:
             helper.urlopen = original_urlopen
 
+    def test_turn_off_all_targets_every_available_climate_entity(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        states = [
+            {
+                "entity_id": "climate.bedroom",
+                "state": "cool",
+                "attributes": {"friendly_name": "Bedroom"},
+            },
+            {
+                "entity_id": "climate.living_room",
+                "state": "off",
+                "attributes": {"friendly_name": "Living room"},
+            },
+            {
+                "entity_id": "climate.garage",
+                "state": "unavailable",
+                "attributes": {"friendly_name": "Garage"},
+            },
+        ]
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, json.loads(request.data) if request.data else None))
+            if request.method == "GET":
+                return FakeResponse(states)
+            return FakeResponse({"ok": True})
+
+        helper.urlopen = fake_urlopen
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = helper.turn_off_all("http://ha.local:8123", "secret")
+            self.assertEqual(result, 0)
+            parsed = json.loads(output.getvalue())
+            self.assertEqual(parsed["count"], 2)
+            self.assertEqual(parsed["turned_off"], ["climate.bedroom", "climate.living_room"])
+            self.assertEqual(
+                requests[-1][0],
+                "http://ha.local:8123/api/services/climate/turn_off",
+            )
+            self.assertEqual(
+                requests[-1][1]["entity_id"],
+                ["climate.bedroom", "climate.living_room"],
+            )
+        finally:
+            helper.urlopen = original_urlopen
+
 
 if __name__ == "__main__":
     unittest.main()

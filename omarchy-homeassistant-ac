@@ -333,6 +333,19 @@ def list_entities(url: str, token: str) -> list[dict[str, Any]]:
     return entities
 
 
+def turn_off_all(url: str, token: str) -> int:
+    entities = list_entities(url, token)
+    entity_ids = [str(entity["id"]) for entity in entities]
+    if not entity_ids:
+        return fail("No available Home Assistant climate entities were found")
+    call_service(url, token, "turn_off", {"entity_id": entity_ids})
+    return emit({
+        "ok": True,
+        "turned_off": entity_ids,
+        "count": len(entity_ids),
+    })
+
+
 def config_snapshot(
     url: str,
     token: str,
@@ -773,10 +786,13 @@ def main(argv: list[str]) -> int:
             return set_fan_mode(url, token, entity_id, argv[2])
         if action == "set-power" and len(argv) == 3:
             return set_power(url, token, entity_id, argv[2])
+        if action == "turn-off-all" and len(argv) == 2:
+            return turn_off_all(url, token)
         return fail(
             "Usage: config | configure | entities | status | set-entity <entity_id> "
             "| set-temperature <value> | set-mode <mode> | set-fan-mode <mode> "
-            "| set-power <on|off> | set-preference <name> <value> | reset-app"
+            "| set-power <on|off> | turn-off-all | set-preference <name> <value> "
+            "| reset-app"
         )
     except MultipleClimateEntitiesError as exc:
         return fail(str(exc), entity_ids=exc.entity_ids, **metadata)
