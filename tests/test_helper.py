@@ -118,6 +118,152 @@ class HelperTests(unittest.TestCase):
                 helper.CONFIG_PATH = original_path
                 helper.urlopen = original_urlopen
 
+    def test_state_payload_includes_optional_fan_controls(self):
+        payload = helper.state_payload(
+            {
+                "entity_id": "climate.office",
+                "state": "cool",
+                "attributes": {
+                    "friendly_name": "Office",
+                    "current_temperature": 24,
+                    "temperature": 22,
+                    "temperature_unit": "C",
+                    "hvac_modes": ["off", "cool", "heat"],
+                    "fan_mode": "Auto",
+                    "fan_modes": ["Auto", "Low", "High"],
+                },
+            },
+            ["climate.office"],
+        )
+        self.assertEqual(payload["fan_mode"], "Auto")
+        self.assertEqual(payload["fan_modes"], ["Auto", "Low", "High"])
+        self.assertEqual(payload["history"], [])
+
+    def test_history_is_capped_to_the_latest_24_hours(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.HISTORY_PATH
+            original_time = helper.time.time
+            helper.HISTORY_PATH = Path(directory) / "state" / "temperature.json"
+            now = 2_000_000_000
+            helper.time.time = lambda: now
+            try:
+                helper.save_temperature_history({
+                    "climate.office": [
+                        {
+                            "timestamp": now - 25 * 60 * 60,
+                            "temperature": 19,
+                            "unit": "°C",
+                        },
+                    ],
+                })
+                samples = helper.record_temperature_history("climate.office", 24, "C")
+                self.assertEqual(len(samples), 1)
+                self.assertEqual(samples[0]["temperature"], 24)
+                self.assertEqual(helper.HISTORY_PATH.stat().st_mode & 0o777, 0o600)
+            finally:
+                helper.HISTORY_PATH = original_path
+                helper.time.time = original_time
+
+    def test_preferences_support_custom_history_ranges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        {
+                            "url": "http://ha.local:8123",
+                            "token": "test-secret",
+                            "entity_id": "climate.office",
+                        },
+                        "history_range",
+                        "custom:2.5",
+                    )
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertEqual(parsed["preference"], "history_range")
+                self.assertEqual(parsed["history_hours"], 2.5)
+                self.assertTrue(parsed["history_custom"])
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["history_hours"], 2.5)
+                self.assertTrue(saved["history_custom"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_reset_app_removes_only_plugin_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_config_path = helper.CONFIG_PATH
+            original_history_path = helper.HISTORY_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.HISTORY_PATH = Path(directory) / "omarchy" / "temperature.json"
+            server_marker = Path(directory) / "homeassistant-server-data"
+            server_marker.write_text("keep", encoding="utf-8")
+            try:
+                helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                helper.CONFIG_PATH.write_text('{"token":"test-secret"}\n', encoding="utf-8")
+                helper.HISTORY_PATH.write_text('{"entities":{}}\n', encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.reset_app()
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertTrue(parsed["reset"])
+                self.assertFalse(helper.CONFIG_PATH.exists())
+                self.assertFalse(helper.HISTORY_PATH.exists())
+                self.assertTrue(server_marker.exists())
+            finally:
+                helper.CONFIG_PATH = original_config_path
+                helper.HISTORY_PATH = original_history_path
+
+    def test_mode_and_fan_requests_use_home_assistant_capabilities(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        state = {
+            "entity_id": "climate.office",
+            "state": "cool",
+            "attributes": {
+                "friendly_name": "Office",
+                "current_temperature": 24,
+                "temperature": 22,
+                "temperature_unit": "C",
+                "hvac_modes": ["off", "cool", "heat"],
+                "fan_mode": "Auto",
+                "fan_modes": ["Auto", "Low", "High"],
+            },
+        }
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, json.loads(request.data) if request.data else None))
+            return FakeResponse(state if request.method == "GET" else {"ok": True})
+
+        helper.urlopen = fake_urlopen
+        try:
+            mode_output = io.StringIO()
+            with contextlib.redirect_stdout(mode_output):
+                self.assertEqual(
+                    helper.set_hvac_mode("http://ha.local:8123", "secret", "climate.office", "Heat"),
+                    0,
+                )
+            mode_result = json.loads(mode_output.getvalue())
+            self.assertEqual(mode_result["requested_mode"], "heat")
+            self.assertTrue(mode_result["restarting"])
+            self.assertEqual(requests[-2][0], "http://ha.local:8123/api/services/climate/set_hvac_mode")
+            self.assertEqual(requests[-2][1]["hvac_mode"], "heat")
+            self.assertEqual(requests[-1][0], "http://ha.local:8123/api/services/climate/turn_on")
+            self.assertEqual(requests[-1][1]["entity_id"], "climate.office")
+
+            fan_output = io.StringIO()
+            with contextlib.redirect_stdout(fan_output):
+                self.assertEqual(
+                    helper.set_fan_mode("http://ha.local:8123", "secret", "climate.office", "High"),
+                    0,
+                )
+            self.assertEqual(json.loads(fan_output.getvalue())["requested_fan_mode"], "High")
+            self.assertEqual(requests[-1][1]["fan_mode"], "High")
+        finally:
+            helper.urlopen = original_urlopen
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,8 +19,9 @@ omarchy plugin add https://github.com/twentylines/omarchy-homeassistant-ac.git -
 ```
 
 The plugin ships its small Python helper and needs only `python3`, which is
-available on a normal Omarchy install. No daemon, package, cloud account, or
-extra Home Assistant add-on is required.
+available on a normal Omarchy install. It does not start a daemon or require a
+cloud account by default. An optional local Home Assistant setup is available
+below for computers that do not have a server yet.
 
 ## First-run setup
 
@@ -28,8 +29,10 @@ Click the Daikin Air glyph in the bar. The centered setup panel asks for:
 
 1. Your Home Assistant base address, such as `http://homeassistant.local:8123`,
    `http://192.168.1.20:8123`, or an HTTPS reverse-proxy URL.
-2. A Home Assistant long-lived access token. Create one from your Home
-   Assistant profile under **Security → Long-Lived Access Tokens**.
+2. A Home Assistant long-lived access token. In Home Assistant, open your
+   profile, go to **Security → Long-Lived Access Tokens**, choose **Create
+   Token**, and copy the token immediately. Home Assistant only shows it once;
+   paste it into Daikin Air while the setup panel is open.
 3. Which available climate entity to control when Home Assistant exposes more
    than one.
 
@@ -45,7 +48,45 @@ never shown in the bar, and never printed by the helper. The helper sends
 requests only to the Home Assistant address you entered.
 
 To change the server, token, or selected entity later, open the panel and use
-the small settings button in the hero card.
+the small settings button in the hero card. The separate Advanced Options
+section can reveal supported climate modes and fan speeds, choose whether the
+bar shows ambient temperature, target temperature, or both, and enable the
+optional Temperature History for Nerds chart.
+
+The chart is a private local log on this PC. Daikin Air keeps at most the latest
+24 hours of ambient readings, and the PC must be active for new samples to be
+recorded. Sleep, shutdown, network outages, and other gaps remain empty in the
+chart. The chart can show the latest 1, 3, 6, 12, or 24 hours, or a custom range
+between 1 and 24 hours.
+
+### Optional local Home Assistant server
+
+If you do not have a Home Assistant server, choose **Set up locally** in the
+connection screen. The plugin runs the supported Home Assistant Container
+installation using the official
+`ghcr.io/home-assistant/home-assistant:stable` image. It stores the container
+data in `~/.local/share/omarchy/homeassistant`, uses host networking so a local
+Daikin integration can reach the AC, and configures Docker to restart the
+container automatically. Host networking can make Home Assistant reachable
+from other devices on your LAN, so your firewall controls that access.
+
+This is an explicit, user-triggered action. If Docker is missing, the script
+uses the Omarchy Arch package manager through `pkexec` and may ask for
+administrator approval to install Docker and enable its service. It downloads
+the image from the Home Assistant GitHub Container Registry. The plugin does
+not silently install this server, remove other containers, or change an
+existing remote Home Assistant connection.
+
+When the container starts, Daikin Air opens `http://127.0.0.1:8123` in your
+browser. Finish Home Assistant onboarding, add the Daikin integration, create
+a long-lived access token, and paste that token into the connection form. The
+Container installation does not include Home Assistant apps, so integrations
+that depend on those apps may need Home Assistant OS or another supported
+installation type instead.
+
+The local container is independent of the plugin. Removing or disabling Daikin
+Air does not remove the container or its data. Review the container and
+`~/.local/share/omarchy/homeassistant` before removing them yourself.
 
 ## Daikin compatibility
 
@@ -68,7 +109,9 @@ This list is controller-focused because the Wi-Fi module and Home Assistant
 integration determine compatibility more than the indoor unit's marketing
 name. Some models do not expose fan or swing controls, but Daikin Air only
 needs the climate entity's power, mode, ambient temperature, and target
-temperature capabilities. If your unit is not supported by the official local
+temperature capabilities. Fan-speed and extra mode controls appear only when
+Home Assistant exposes them. Swing and preset controls are intentionally not
+shown because support varies widely between units. If your unit is not supported by the official local
 integration, Home Assistant also documents ESP32-Faikout as an alternative
 path; Daikin Air can use its resulting `climate.*` entity too.
 
@@ -89,9 +132,17 @@ and integration setup instructions.
 | `Esc` | Close the panel |
 | Settings button | Re-run connection setup |
 
+When Advanced Options are enabled, supported Home Assistant climate modes and
+fan speeds appear in the main panel. Changes preview immediately and are sent
+to Home Assistant in the background.
+
 Temperature changes preview immediately and are committed after interaction
 stops. Power changes remain visibly pending while Home Assistant settles, with
 a final state check after 15 seconds if the controller is slow to report.
+
+The project page has setup help, Home Assistant notes, and future tutorials:
+[github.com/twentylines/omarchy-homeassistant-ac](https://github.com/twentylines/omarchy-homeassistant-ac).
+Daikin Air is made by Sai.
 
 ## Requirements
 
@@ -102,6 +153,10 @@ a final state check after 15 seconds if the controller is slow to report.
 - A Home Assistant long-lived access token with permission to read and control
   the chosen climate entity
 - `python3`
+
+The optional local server flow also needs internet access, Docker, and the
+ability to approve Docker package and service setup when those are not already
+available.
 
 ## Troubleshooting
 
@@ -131,6 +186,13 @@ Use the settings button in the panel. If you need to remove the saved
 credentials manually, delete `~/.config/omarchy/home-assistant-ac.json` and
 open the widget again; the setup flow will return automatically.
 
+### Reset the app
+
+Use **App Data > Reset App** in the settings panel to remove Daikin Air's
+saved connection, preferences, and local temperature history. The action asks
+for confirmation and does not reset Home Assistant, Docker, the local
+Home Assistant container, or any Home Assistant data.
+
 ## Development
 
 From the repository root:
@@ -148,4 +210,4 @@ For a local copy while developing, place the repository at
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -22,6 +23,12 @@ CONFIG_PATH = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "omarchy/home-assistant-ac.json"
 )
+HISTORY_PATH = (
+    Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    / "omarchy/home-assistant-ac-temperature.json"
+)
+HISTORY_RETENTION_SECONDS = 24 * 60 * 60
+HISTORY_MAX_SAMPLES = 6000
 
 
 class HomeAssistantError(RuntimeError):
@@ -58,11 +65,46 @@ def load_config() -> dict[str, Any]:
     return value
 
 
-def config_values(config: dict[str, Any]) -> tuple[str, str, str]:
+def preference_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def temperature_display(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"ambient", "target", "both"} else "both"
+
+
+def history_hours(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 24
+    if parsed != parsed or not 1 <= parsed <= 24:
+        return 24
+    return round(parsed, 2)
+
+
+def config_values(config: dict[str, Any]) -> tuple[str, str, str, bool, str, bool, float, bool]:
     url = normalize_url(config.get("url") or os.environ.get("HOME_ASSISTANT_URL") or DEFAULT_URL)
     token = str(config.get("token") or os.environ.get("HOME_ASSISTANT_TOKEN") or "").strip()
     entity_id = str(config.get("entity_id") or "").strip()
-    return url, token, entity_id
+    advanced_controls = preference_enabled(config.get("advanced_controls"))
+    display = temperature_display(config.get("temperature_display"))
+    history_enabled = preference_enabled(config.get("history_enabled"))
+    selected_history_hours = history_hours(config.get("history_hours"))
+    history_custom = preference_enabled(config.get("history_custom"))
+    return (
+        url,
+        token,
+        entity_id,
+        advanced_controls,
+        display,
+        history_enabled,
+        selected_history_hours,
+        history_custom,
+    )
 
 
 def normalize_url(value: Any) -> str:
@@ -143,6 +185,104 @@ def temperature_unit(value: Any) -> str:
     return text if text.startswith("°") else f"°{text}"
 
 
+def load_temperature_history() -> dict[str, list[dict[str, Any]]]:
+    """Read best-effort local ambient samples without affecting live control."""
+    try:
+        with HISTORY_PATH.open(encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    entities = raw.get("entities", raw)
+    if not isinstance(entities, dict):
+        return {}
+    cleaned: dict[str, list[dict[str, Any]]] = {}
+    for entity_id, samples in entities.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith("climate."):
+            continue
+        if not isinstance(samples, list):
+            continue
+        valid: list[dict[str, Any]] = []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            timestamp = number(sample.get("timestamp"))
+            value = number(sample.get("temperature"))
+            if timestamp is None or value is None:
+                continue
+            valid.append({
+                "timestamp": int(timestamp),
+                "temperature": value,
+                "unit": temperature_unit(sample.get("unit")),
+            })
+        if valid:
+            cleaned[entity_id] = valid[-HISTORY_MAX_SAMPLES:]
+    return cleaned
+
+
+def save_temperature_history(history: dict[str, list[dict[str, Any]]]) -> None:
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".home-assistant-ac-temperature.", dir=HISTORY_PATH.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "entities": history}, handle, separators=(",", ":"))
+            handle.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, HISTORY_PATH)
+        os.chmod(HISTORY_PATH, 0o600)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def prune_temperature_history(
+    history: dict[str, list[dict[str, Any]]], now: float
+) -> dict[str, list[dict[str, Any]]]:
+    cutoff = now - HISTORY_RETENTION_SECONDS
+    pruned: dict[str, list[dict[str, Any]]] = {}
+    for entity_id, samples in history.items():
+        recent = [
+            sample for sample in samples
+            if cutoff <= float(sample["timestamp"]) <= now + 300
+        ]
+        if recent:
+            pruned[entity_id] = recent[-HISTORY_MAX_SAMPLES:]
+    return pruned
+
+
+def record_temperature_history(entity_id: str, value: Any, unit: str) -> list[dict[str, Any]]:
+    """Append one ambient reading and retain exactly the latest 24 hours."""
+    history = prune_temperature_history(load_temperature_history(), time.time())
+    numeric_value = number(value)
+    entity_id = str(entity_id or "").strip()
+    if not entity_id or numeric_value is None:
+        return history.get(entity_id, [])
+
+    now = time.time()
+    samples = history.setdefault(entity_id, [])
+    sample = {
+        "timestamp": int(now),
+        "temperature": numeric_value,
+        "unit": temperature_unit(unit),
+    }
+    if samples and int(samples[-1]["timestamp"]) >= int(now) - 15:
+        samples[-1] = sample
+    else:
+        samples.append(sample)
+    history = prune_temperature_history(history, now)
+    try:
+        save_temperature_history(history)
+    except OSError:
+        # A read-only or unavailable state directory must not break status.
+        pass
+    return history.get(entity_id, [])
+
+
 def resolve_state(url: str, token: str, configured_entity: str) -> tuple[dict[str, Any], list[str]]:
     if configured_entity:
         state = api_request(url, token, "GET", f"/api/states/{quote(configured_entity, safe='')}")
@@ -193,12 +333,26 @@ def list_entities(url: str, token: str) -> list[dict[str, Any]]:
     return entities
 
 
-def config_snapshot(url: str, token: str, entity_id: str) -> int:
+def config_snapshot(
+    url: str,
+    token: str,
+    entity_id: str,
+    advanced_controls: bool,
+    display: str,
+    history_enabled: bool,
+    selected_history_hours: float,
+    history_custom: bool,
+) -> int:
     return emit({
         "ok": True,
         "configured": bool(token),
         "url": url,
         "entity_id": entity_id,
+        "advanced_controls": advanced_controls,
+        "temperature_display": display,
+        "history_enabled": history_enabled,
+        "history_hours": selected_history_hours,
+        "history_custom": history_custom,
     })
 
 
@@ -287,6 +441,11 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "url": url,
         "token": token,
         "entity_id": entity_id,
+        "advanced_controls": preference_enabled(current_config.get("advanced_controls")),
+        "temperature_display": temperature_display(current_config.get("temperature_display")),
+        "history_enabled": preference_enabled(current_config.get("history_enabled")),
+        "history_hours": history_hours(current_config.get("history_hours")),
+        "history_custom": preference_enabled(current_config.get("history_custom")),
     }
     if current_config.get("poll_seconds") is not None:
         config["poll_seconds"] = current_config["poll_seconds"]
@@ -303,6 +462,11 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "entity_id": entity_id,
         "name": selected["name"],
         "entities": entities,
+        "advanced_controls": config["advanced_controls"],
+        "temperature_display": config["temperature_display"],
+        "history_enabled": config["history_enabled"],
+        "history_hours": config["history_hours"],
+        "history_custom": config["history_custom"],
     })
 
 
@@ -335,6 +499,7 @@ def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any
     attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
     entity_id = str(state.get("entity_id") or entity_ids[0])
     modes = attrs.get("hvac_modes") if isinstance(attrs.get("hvac_modes"), list) else []
+    fan_modes = attrs.get("fan_modes") if isinstance(attrs.get("fan_modes"), list) else []
     return {
         "ok": True,
         "entity_id": entity_id,
@@ -348,13 +513,20 @@ def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any
         "min_temp": number(attrs.get("min_temp")),
         "max_temp": number(attrs.get("max_temp")),
         "hvac_modes": [str(mode) for mode in modes],
+        "fan_mode": str(attrs.get("fan_mode") or ""),
+        "fan_modes": [str(mode) for mode in fan_modes],
+        "history": [],
         "last_updated": state.get("last_updated"),
     }
 
 
 def status(url: str, token: str, configured_entity: str) -> int:
     state, entity_ids = resolve_state(url, token, configured_entity)
-    return emit(state_payload(state, entity_ids))
+    payload = state_payload(state, entity_ids)
+    payload["history"] = record_temperature_history(
+        payload["entity_id"], payload.get("ambient"), payload["unit"]
+    )
+    return emit(payload)
 
 
 def call_service(url: str, token: str, service: str, data: dict[str, Any]) -> None:
@@ -401,11 +573,12 @@ def set_power(url: str, token: str, configured_entity: str, requested_power: str
         return fail("Power state must be on or off")
     state, entity_ids = resolve_state(url, token, configured_entity)
     payload = state_payload(state, entity_ids)
-    modes = [mode.lower() for mode in payload["hvac_modes"]]
+    available_modes = [str(mode) for mode in payload["hvac_modes"]]
+    modes = {mode.casefold(): mode for mode in available_modes}
     if requested_power == "on":
-        preferred = next((mode for mode in ("cool", "auto", "heat", "dry", "fan_only") if mode in modes), None)
+        preferred = next((modes[mode] for mode in ("cool", "auto", "heat", "dry", "fan_only") if mode in modes), None)
         if preferred is None:
-            preferred = next((mode for mode in modes if mode != "off"), None)
+            preferred = next((mode for mode in available_modes if mode.casefold() != "off"), None)
         if preferred is None:
             return fail("The climate entity has no mode available for powering on")
         target_mode = preferred
@@ -419,22 +592,164 @@ def set_power(url: str, token: str, configured_entity: str, requested_power: str
     })
 
 
+def set_hvac_mode(url: str, token: str, configured_entity: str, raw_mode: str) -> int:
+    requested = raw_mode.strip()
+    if not requested:
+        return fail("Choose a climate mode")
+    state, entity_ids = resolve_state(url, token, configured_entity)
+    payload = state_payload(state, entity_ids)
+    available = [str(mode) for mode in payload["hvac_modes"]]
+    selected = next((mode for mode in available if mode.casefold() == requested.casefold()), None)
+    if selected is None:
+        return fail("That climate mode is not available for this entity")
+    call_service(url, token, "set_hvac_mode", {
+        "entity_id": payload["entity_id"],
+        "hvac_mode": selected,
+    })
+    restarting = selected.casefold() != "off"
+    if restarting:
+        call_service(url, token, "turn_on", {"entity_id": payload["entity_id"]})
+    return emit({
+        "ok": True,
+        "entity_id": payload["entity_id"],
+        "requested_mode": selected,
+        "restarting": restarting,
+    })
+
+
+def set_fan_mode(url: str, token: str, configured_entity: str, raw_mode: str) -> int:
+    requested = raw_mode.strip()
+    if not requested:
+        return fail("Choose a fan speed")
+    state, entity_ids = resolve_state(url, token, configured_entity)
+    payload = state_payload(state, entity_ids)
+    available = [str(mode) for mode in payload["fan_modes"]]
+    selected = next((mode for mode in available if mode.casefold() == requested.casefold()), None)
+    if selected is None:
+        if available:
+            return fail("That fan speed is not available for this entity")
+        return fail("This climate entity does not expose fan-speed controls")
+    call_service(url, token, "set_fan_mode", {
+        "entity_id": payload["entity_id"],
+        "fan_mode": selected,
+    })
+    return emit({
+        "ok": True,
+        "entity_id": payload["entity_id"],
+        "requested_fan_mode": selected,
+    })
+
+
+def reset_app() -> int:
+    """Remove only Daikin Air's saved connection, preferences, and history."""
+    removed: list[str] = []
+    for path in (CONFIG_PATH, HISTORY_PATH):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return fail(f"Cannot reset Daikin Air data at {path}: {exc}")
+        removed.append(str(path))
+    return emit({"ok": True, "reset": True, "removed": removed})
+
+
+def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int:
+    name = raw_name.strip().lower()
+    value_text = raw_value.strip()
+    if name == "advanced_controls":
+        if value_text.lower() not in {"on", "off"}:
+            return fail("Advanced controls must be on or off")
+        value: Any = value_text.lower() == "on"
+        config[name] = value
+    elif name == "temperature_display":
+        value = temperature_display(value_text)
+        if value_text.lower() not in {"ambient", "target", "both"}:
+            return fail("Temperature display must be ambient, target, or both")
+        config[name] = value
+    elif name == "history_enabled":
+        if value_text.lower() not in {"on", "off"}:
+            return fail("Temperature history must be on or off")
+        value = value_text.lower() == "on"
+        config[name] = value
+    elif name == "history_range":
+        if value_text.lower() in {"1", "3", "6", "12", "24"}:
+            value = float(value_text)
+            config["history_hours"] = int(value)
+            config["history_custom"] = False
+        elif value_text.lower().startswith("custom:"):
+            try:
+                value = float(value_text.split(":", 1)[1].strip())
+            except (TypeError, ValueError):
+                return fail("Custom history must be between 1 and 24 hours")
+            if value != value or not 1 <= value <= 24:
+                return fail("Custom history must be between 1 and 24 hours")
+            value = round(value, 2)
+            config["history_hours"] = value
+            config["history_custom"] = True
+        else:
+            return fail("Choose 1, 3, 6, 12, 24, or a custom history range")
+    else:
+        return fail("Unknown preference")
+    try:
+        save_config(config)
+    except OSError as exc:
+        return fail(f"Cannot save the AC configuration: {exc}")
+    response: dict[str, Any] = {"ok": True, "preference": name}
+    if name == "history_range":
+        response.update({
+            "history_hours": config["history_hours"],
+            "history_custom": config["history_custom"],
+        })
+    else:
+        response["value"] = value
+    return emit(response)
+
+
+def set_advanced_controls(config: dict[str, Any], raw_value: str) -> int:
+    """Backward-compatible alias for older local panel copies."""
+    return set_preference(config, "advanced_controls", raw_value)
+
+
 def main(argv: list[str]) -> int:
+    action = argv[1] if len(argv) > 1 else "status"
+    if action == "reset-app" and len(argv) == 2:
+        return reset_app()
     try:
         config = load_config()
-        url, token, entity_id = config_values(config)
+        (
+            url,
+            token,
+            entity_id,
+            advanced_controls,
+            display,
+            history_enabled,
+            selected_history_hours,
+            history_custom,
+        ) = config_values(config)
     except HomeAssistantError as exc:
         return fail(str(exc))
 
-    action = argv[1] if len(argv) > 1 else "status"
     if action == "config" and len(argv) == 2:
-        return config_snapshot(url, token, entity_id)
+        return config_snapshot(
+            url,
+            token,
+            entity_id,
+            advanced_controls,
+            display,
+            history_enabled,
+            selected_history_hours,
+            history_custom,
+        )
     if action == "configure" and len(argv) == 2:
         try:
             return configure(read_setup_payload(), config)
         except HomeAssistantError as exc:
             return fail(str(exc), configured=False, url=url)
-
+    if action == "set-advanced-controls" and len(argv) == 3:
+        return set_advanced_controls(config, argv[2])
+    if action == "set-preference" and len(argv) == 4:
+        return set_preference(config, argv[2], argv[3])
     if not token:
         return fail(
             f"Add a Home Assistant long-lived access token to {CONFIG_PATH}",
@@ -452,11 +767,16 @@ def main(argv: list[str]) -> int:
             return set_entity(config, argv[2])
         if action == "set-temperature" and len(argv) == 3:
             return set_temperature(url, token, entity_id, argv[2])
+        if action == "set-mode" and len(argv) == 3:
+            return set_hvac_mode(url, token, entity_id, argv[2])
+        if action == "set-fan-mode" and len(argv) == 3:
+            return set_fan_mode(url, token, entity_id, argv[2])
         if action == "set-power" and len(argv) == 3:
             return set_power(url, token, entity_id, argv[2])
         return fail(
             "Usage: config | configure | entities | status | set-entity <entity_id> "
-            "| set-temperature <value> | set-power <on|off>"
+            "| set-temperature <value> | set-mode <mode> | set-fan-mode <mode> "
+            "| set-power <on|off> | set-preference <name> <value> | reset-app"
         )
     except MultipleClimateEntitiesError as exc:
         return fail(str(exc), entity_ids=exc.entity_ids, **metadata)

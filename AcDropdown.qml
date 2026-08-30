@@ -10,12 +10,12 @@ import qs.Ui
 //
 // `options` accepts either a plain string[] or an array of
 // { value, label } objects (label is what we render; value is what we
-// emit). Mixing is fine — each row is interpreted independently.
+// emit). Mixing is fine, each row is interpreted independently.
 //
 // Keyboard: Tab to focus the trigger, Enter/Space opens, Esc closes,
 // j/k or Up/Down walks options inside the open popup, Enter selects.
 // A sibling SearchableDropdown reuses the same visuals but adds an
-// embedded filter input — keep the two separate so each stays simple.
+// embedded filter input. Keep the two separate so each stays simple.
 Item {
   id: root
 

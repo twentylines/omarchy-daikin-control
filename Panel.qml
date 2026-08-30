@@ -16,6 +16,9 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
+  readonly property string githubUrl: "https://github.com/twentylines/omarchy-homeassistant-ac"
+  readonly property string homeAssistantLinuxGuideUrl: "https://www.home-assistant.io/installation/linux/"
+  readonly property string localServerUrl: "http://127.0.0.1:8123"
   readonly property string pluginDir: {
     var u = String(Qt.resolvedUrl("."))
     if (u.indexOf("file://") === 0) u = u.slice(7)
@@ -23,6 +26,7 @@ Panel {
     return u
   }
   readonly property string helperPath: root.pluginDir + "/omarchy-homeassistant-ac"
+  readonly property string localServerScriptPath: root.pluginDir + "/setup-homeassistant.sh"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -44,12 +48,42 @@ Panel {
   property bool powerFinalCheckPending: false
   property bool powerCanCancel: false
   property string queuedPowerRequest: ""
+  property string queuedControlKind: ""
+  property string queuedControlValue: ""
   property var temperatureInFlight: null
   property var lastTemperatureSent: null
+  property string localMode: ""
+  property string localFanMode: ""
+  property string modeInFlight: ""
+  property string fanModeInFlight: ""
+  property bool modeRestarting: false
+  property double modeRestartStartedAt: 0
   property bool configResolved: false
   property bool configured: false
   property bool setupOpen: false
+  property bool setupTransitioning: false
   property bool setupBusy: false
+  property bool localServerBusy: false
+  property bool localServerReady: false
+  property string localServerMessage: ""
+  property string localServerError: ""
+  property bool resetAppConfirming: false
+  property bool resetAppBusy: false
+  property string resetAppMessage: ""
+  property string resetAppError: ""
+  property bool advancedControls: false
+  property bool preferenceBusy: false
+  property string preferenceKind: ""
+  property bool advancedControlsPrevious: false
+  property string temperatureDisplay: "both"
+  property string temperatureDisplayPrevious: "both"
+  property bool historyEnabled: false
+  property bool historyEnabledPrevious: false
+  property real historyHours: 24
+  property real historyHoursPrevious: 24
+  property bool historyCustom: false
+  property bool historyCustomPrevious: false
+  property string customHistoryHoursText: "24"
   property bool setupSucceeded: false
   property string setupUrl: "http://homeassistant.local:8123"
   property string setupToken: ""
@@ -68,7 +102,26 @@ Panel {
     value: "",
     label: "Choose an air conditioner"
   }].concat(setupEntityOptions)
+  readonly property var modeDropdownOptions: [{
+    value: "",
+    label: "Choose a mode"
+  }].concat(modeOptions)
+  readonly property var fanModeDropdownOptions: [{
+    value: "",
+    label: "Choose fan speed"
+  }].concat(fanModeOptions)
+  readonly property var historyRangeOptions: [
+    { value: "1", label: "1 H" },
+    { value: "3", label: "3 H" },
+    { value: "6", label: "6 H" },
+    { value: "12", label: "12 H" },
+    { value: "24", label: "24 H" },
+    { value: "custom", label: "CUSTOM" },
+  ]
   readonly property bool setupCanSubmit: !setupBusy
+    && !preferenceBusy
+    && !localServerBusy
+    && !resetAppBusy
     && String(setupUrl || "").trim() !== ""
     && String(setupToken || "").trim() !== ""
     && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
@@ -78,17 +131,54 @@ Panel {
   readonly property bool actualIsOn: connected && String(reading.state || "").toLowerCase() !== "off"
   readonly property bool hasLocalPower: pendingPowerState !== ""
   readonly property bool localPower: pendingPowerState === "turning_on"
-  readonly property bool isOn: connected && (hasLocalPower ? localPower : actualIsOn)
+  readonly property bool isOn: connected
+    && (hasLocalPower ? localPower : (actualIsOn || modeRestarting))
   readonly property string unit: connected ? String(reading.unit || "°C") : "°C"
-  readonly property string ambientText: connected ? temperature(reading.ambient) : "—"
+  readonly property string ambientText: connected ? temperature(reading.ambient) : "..."
   readonly property bool hasLocalTarget: localTarget !== null && isFinite(Number(localTarget))
   readonly property var targetValue: hasLocalTarget ? Number(localTarget) : reading.target
-  readonly property string targetText: connected ? temperature(targetValue) : "—"
+  readonly property string targetText: connected ? temperature(targetValue) : "..."
   readonly property bool otherActionBusy: actionProcess.running && actionKind !== "temperature"
+  readonly property string activeMode: localMode !== "" ? localMode : String(reading.state || "")
+  readonly property string activeFanMode: localFanMode !== ""
+    ? localFanMode : String(reading.fan_mode || "")
+  readonly property var modeOptions: formatControlOptions(reading.hvac_modes, true)
+  readonly property var fanModeOptions: formatControlOptions(reading.fan_modes, false)
+  readonly property bool advancedControlsVisible: advancedControls && connected
+    && (isOn || modeRestarting || localMode !== "")
+    && (modeOptions.length > 0 || fanModeOptions.length > 0)
+  readonly property string modeText: activeMode !== "" ? controlLabel(activeMode) : "MODE"
+  readonly property string fanModeText: activeFanMode !== ""
+    ? controlLabel(activeFanMode) : "FAN SPEED"
+  readonly property bool showAmbientOnBar: temperatureDisplay === "ambient"
+    || temperatureDisplay === "both"
+  readonly property bool showTargetOnBar: temperatureDisplay === "target"
+    || temperatureDisplay === "both"
+  readonly property bool historyChartVisible: historyEnabled && connected
+  readonly property var historyPoints: {
+    var next = []
+    if (!connected || !Array.isArray(reading.history)) return next
+    var cutoff = Date.now() / 1000 - Number(historyHours) * 60 * 60
+    for (var i = 0; i < reading.history.length; i++) {
+      var item = reading.history[i]
+      if (!item || !isFinite(Number(item.timestamp)) || !isFinite(Number(item.temperature))) continue
+      if (Number(item.timestamp) >= cutoff) {
+        next.push({
+          timestamp: Number(item.timestamp),
+          temperature: Number(item.temperature),
+          unit: String(item.unit || unit),
+        })
+      }
+    }
+    next.sort(function(first, second) { return first.timestamp - second.timestamp })
+    return next
+  }
+  readonly property string historyHoursLabel: formatHours(historyHours) + " H"
   readonly property color stateColor: connected && isOn ? Color.accent : dim
   readonly property color statusColor: hasLocalPower ? Color.accent : stateColor
   readonly property string deviceInfoText: connected ? String(reading.device_info || "Home Assistant climate") : "Home Assistant climate"
   readonly property string connectionText: !connected ? "OFFLINE"
+    : modeRestarting ? "RESTARTING AC…"
     : hasLocalPower ? (localPower === true ? "POWERING ON…" : "POWERING OFF…")
     : isOn ? "ON" : "OFF"
   readonly property real temperatureDelta: connected && isOn
@@ -111,8 +201,9 @@ Panel {
     : "󰜗"
   readonly property string tooltip: connected
     ? (String(reading.name || "Air conditioner")
-       + (hasLocalPower ? (localPower ? " · Powering on…" : " · Powering off…")
-          : " · " + stateLabel(reading.state))
+       + (modeRestarting ? " · Restarting AC…"
+          : hasLocalPower ? (localPower ? " · Powering on…" : " · Powering off…")
+            : " · " + stateLabel(reading.state))
        + " · ambient " + ambientText
        + (!hasLocalPower && isOn ? " · set " + targetText : "")
        + (hasLocalPower && powerCanCancel ? " · right-click to cancel" : ""))
@@ -120,7 +211,7 @@ Panel {
 
   function temperature(value) {
     var parsed = Number(value)
-    if (!isFinite(parsed)) return "—"
+    if (!isFinite(parsed)) return "..."
     var rounded = Math.round(parsed * 10) / 10
     return String(rounded).replace(/\.0$/, "") + unit
   }
@@ -137,11 +228,106 @@ Panel {
     return state.charAt(0).toUpperCase() + state.slice(1)
   }
 
+  function normalizeHistoryHours(value) {
+    var next = Number(value)
+    if (!isFinite(next)) return 24
+    next = Math.max(1, Math.min(24, next))
+    return Math.round(next * 100) / 100
+  }
+
+  function formatHours(value) {
+    var next = normalizeHistoryHours(value)
+    return String(next).replace(/\.0$/, "")
+  }
+
+  function historyPresetValue(value) {
+    var next = Number(value)
+    return isFinite(next) && [1, 3, 6, 12, 24].indexOf(next) !== -1 ? String(next) : "custom"
+  }
+
+  function controlLabel(value) {
+    var words = String(value || "").replace(/[_-]+/g, " ").split(/\s+/)
+    var result = []
+    for (var i = 0; i < words.length; i++) {
+      if (words[i] === "") continue
+      result.push(words[i].charAt(0).toUpperCase() + words[i].slice(1).toLowerCase())
+    }
+    return result.join(" ")
+  }
+
+  function climateModeIcon(value) {
+    var mode = String(value || "").trim().toLowerCase()
+    if (mode === "heat") return "󰈸"
+    if (mode === "dry") return "󰖌"
+    if (mode === "fan_only" || mode === "fan only" || mode === "fan") return "󰡣"
+    if (mode === "auto" || mode === "heat_cool" || mode === "heat cool") return "󰖙"
+    if (mode === "cool") return "󰜗"
+    return "󰜗"
+  }
+
+  function sameControlValue(first, second) {
+    var a = String(first || "").trim().toLowerCase()
+    var b = String(second || "").trim().toLowerCase()
+    return a !== "" && a === b
+  }
+
+  function formatControlOptions(items, excludeOff) {
+    var next = []
+    if (!Array.isArray(items)) return next
+    for (var i = 0; i < items.length; i++) {
+      var value = String(items[i] || "").trim()
+      if (!value || (excludeOff && value.toLowerCase() === "off")) continue
+      var duplicate = false
+      for (var j = 0; j < next.length; j++) {
+        if (sameControlValue(next[j].value, value)) { duplicate = true; break }
+      }
+      if (!duplicate) next.push({ value: value, label: controlLabel(value) })
+    }
+    return next
+  }
+
   function clearLocalPower() {
     pendingPowerState = ""
     powerRequestStartedAt = 0
     powerFinalCheckPending = false
     powerCanCancel = false
+  }
+
+  function beginModeRestart() {
+    modeRestarting = true
+    modeRestartStartedAt = Date.now()
+  }
+
+  function clearModeRestart() {
+    modeRestarting = false
+    modeRestartStartedAt = 0
+  }
+
+  function clearLocalClimateControls() {
+    localMode = ""
+    localFanMode = ""
+    modeInFlight = ""
+    fanModeInFlight = ""
+    root.clearModeRestart()
+    queuedControlKind = ""
+    queuedControlValue = ""
+  }
+
+  function rejectLocalAction() {
+    if (actionKind === "temperature") {
+      var failedTarget = temperatureInFlight
+      if (failedTarget !== null && (!hasLocalTarget || sameTemperature(localTarget, failedTarget))) {
+        localTarget = null
+        lastTemperatureSent = null
+      }
+    } else if (actionKind === "mode") {
+      if (modeInFlight !== "" && sameControlValue(localMode, modeInFlight)) localMode = ""
+      modeInFlight = ""
+      root.clearModeRestart()
+    } else if (actionKind === "fan") {
+      if (fanModeInFlight !== "" && sameControlValue(localFanMode, fanModeInFlight)) localFanMode = ""
+      fanModeInFlight = ""
+    }
   }
 
   function normalizeTarget(value) {
@@ -216,7 +402,8 @@ Panel {
   }
 
   function refreshStatus() {
-    if (statusProcess.running || actionProcess.running || setupProcess.running) return false
+    if (statusProcess.running || actionProcess.running || setupProcess.running
+        || preferenceProcess.running) return false
     statusProcess.command = ["python3", root.helperPath, "status"]
     statusProcess.running = true
     return true
@@ -239,17 +426,26 @@ Panel {
   }
 
   function openSetup() {
-    if (setupProcess.running) return
-    setupOpen = true
+    if (setupProcess.running || setupTransitioning) return
     setupError = ""
     setupEntityOptions = []
     setupSelectedEntity = ""
     setupToken = ""
     if (setupUrl === "") setupUrl = "http://homeassistant.local:8123"
-    Qt.callLater(function() { setupUrlField.forceActiveFocus() })
+    if (root.configured && root.opened) {
+      setupTransitioning = true
+      setupOpen = false
+      setupTransitionTimer.restart()
+    } else {
+      setupOpen = true
+      Qt.callLater(function() { setupUrlField.forceActiveFocus() })
+    }
   }
 
   function cancelSetup() {
+    setupTransitionTimer.stop()
+    setupTransitionFinishTimer.stop()
+    setupTransitioning = false
     if (!configured) {
       root.close()
       return
@@ -276,6 +472,133 @@ Panel {
     setupProcess.running = true
   }
 
+  function openLocalServer() {
+    setupUrl = root.localServerUrl
+    var opened = Qt.openUrlExternally(root.localServerUrl)
+    if (!opened) {
+      localServerMessage = "Home Assistant should be available at " + root.localServerUrl + "."
+    }
+  }
+
+  function startLocalServer() {
+    if (localServerProcess.running || setupProcess.running || preferenceProcess.running) return
+    localServerError = ""
+    localServerMessage = "Checking Docker and preparing the local Home Assistant container…"
+    localServerReady = false
+    setupUrl = root.localServerUrl
+    localServerBusy = true
+    localServerProcess.command = [root.localServerScriptPath]
+    localServerProcess.running = true
+  }
+
+  function applyLocalServerResult(raw) {
+    var text = String(raw || "").trim()
+    if (text === "") {
+      localServerError = "The local Home Assistant setup returned no data."
+      localServerMessage = ""
+      return
+    }
+    try {
+      var parsed = JSON.parse(text)
+      if (parsed && parsed.ok === true) {
+        localServerError = ""
+        localServerReady = true
+        setupUrl = String(parsed.url || root.localServerUrl)
+        localServerMessage = String(parsed.message || "Home Assistant is ready locally.")
+        var opened = Qt.openUrlExternally(setupUrl)
+        if (!opened) {
+          localServerMessage += " Open it at " + setupUrl + "."
+        }
+        return
+      }
+      localServerReady = false
+      localServerMessage = ""
+      localServerError = parsed && parsed.error
+        ? String(parsed.error) : "The local Home Assistant setup could not be completed."
+    } catch (e) {
+      localServerReady = false
+      localServerMessage = ""
+      localServerError = "The local Home Assistant setup returned invalid data."
+    }
+  }
+
+  function requestResetApp() {
+    if (resetAppBusy) return
+    resetAppError = ""
+    resetAppMessage = ""
+    resetAppConfirming = true
+  }
+
+  function cancelResetApp() {
+    if (resetAppBusy) return
+    resetAppConfirming = false
+    resetAppError = ""
+  }
+
+  function resetApp() {
+    if (resetAppBusy || setupProcess.running || localServerProcess.running
+        || preferenceProcess.running || actionProcess.running || statusProcess.running
+        || configProcess.running || entitiesProcess.running) return
+    resetAppBusy = true
+    resetAppError = ""
+    resetAppMessage = ""
+    resetAppProcess.command = ["python3", root.helperPath, "reset-app"]
+    resetAppProcess.running = true
+  }
+
+  function applyResetAppResult(raw) {
+    var text = String(raw || "").trim()
+    if (text === "") {
+      resetAppError = "The app reset returned no data."
+      return
+    }
+    try {
+      var parsed = JSON.parse(text)
+      if (parsed && parsed.ok === true && parsed.reset === true) {
+        configured = false
+        configResolved = true
+        reading = ({})
+        entityOptions = []
+        selectedEntity = ""
+        pendingEntity = ""
+        root.clearLocalPower()
+        localTarget = null
+        lastTemperatureSent = null
+        root.clearLocalClimateControls()
+        setupOpen = true
+        setupTransitioning = false
+        setupUrl = "http://homeassistant.local:8123"
+        setupToken = ""
+        setupError = ""
+        setupEntityOptions = []
+        setupSelectedEntity = ""
+        localServerReady = false
+        localServerMessage = ""
+        localServerError = ""
+        advancedControls = false
+        advancedControlsPrevious = false
+        temperatureDisplay = "both"
+        temperatureDisplayPrevious = "both"
+        historyEnabled = false
+        historyEnabledPrevious = false
+        historyHours = 24
+        historyHoursPrevious = 24
+        historyCustom = false
+        historyCustomPrevious = false
+        customHistoryHoursText = "24"
+        resetAppConfirming = false
+        resetAppError = ""
+        resetAppMessage = "Daikin Air was reset. Home Assistant was not changed."
+        Qt.callLater(function() { setupUrlField.forceActiveFocus() })
+        return
+      }
+      resetAppError = parsed && parsed.error
+        ? String(parsed.error) : "Daikin Air could not be reset."
+    } catch (e) {
+      resetAppError = "The app reset returned invalid data."
+    }
+  }
+
   function applyConfig(raw) {
     var text = String(raw || "").trim()
     configResolved = true
@@ -294,6 +617,18 @@ Panel {
         return
       }
       configured = parsed.configured === true
+      advancedControls = parsed.advanced_controls === true
+      advancedControlsPrevious = advancedControls
+      temperatureDisplay = ["ambient", "target", "both"].indexOf(String(parsed.temperature_display || "both")) !== -1
+        ? String(parsed.temperature_display || "both") : "both"
+      temperatureDisplayPrevious = temperatureDisplay
+      historyEnabled = parsed.history_enabled === true
+      historyEnabledPrevious = historyEnabled
+      historyHours = root.normalizeHistoryHours(parsed.history_hours)
+      historyHoursPrevious = historyHours
+      historyCustom = parsed.history_custom === true
+      historyCustomPrevious = historyCustom
+      customHistoryHoursText = root.formatHours(historyHours)
       if (parsed.url) setupUrl = String(parsed.url)
       if (parsed.entity_id) {
         selectedEntity = String(parsed.entity_id)
@@ -339,6 +674,30 @@ Panel {
           setupSelectedEntity = selectedEntity
         }
         if (parsed.entities) setEntityOptions(parsed.entities)
+        if (parsed.advanced_controls !== undefined) {
+          advancedControls = parsed.advanced_controls === true
+          advancedControlsPrevious = advancedControls
+        }
+        if (parsed.temperature_display !== undefined) {
+          var parsedDisplay = String(parsed.temperature_display)
+          if (["ambient", "target", "both"].indexOf(parsedDisplay) !== -1) {
+            temperatureDisplay = parsedDisplay
+            temperatureDisplayPrevious = parsedDisplay
+          }
+        }
+        if (parsed.history_enabled !== undefined) {
+          historyEnabled = parsed.history_enabled === true
+          historyEnabledPrevious = historyEnabled
+        }
+        if (parsed.history_hours !== undefined) {
+          historyHours = root.normalizeHistoryHours(parsed.history_hours)
+          historyHoursPrevious = historyHours
+          customHistoryHoursText = root.formatHours(historyHours)
+        }
+        if (parsed.history_custom !== undefined) {
+          historyCustom = parsed.history_custom === true
+          historyCustomPrevious = historyCustom
+        }
         setupSucceeded = true
         return
       }
@@ -369,6 +728,11 @@ Panel {
         errorText = ""
         return
       }
+      if (source === "action" && (actionKind === "mode" || actionKind === "fan")) {
+        root.rejectLocalAction()
+        errorText = ""
+        return
+      }
       if (source === "status" && powerFinalCheckPending) {
         root.clearLocalPower()
         errorText = "Could not refresh Home Assistant after 15 seconds; showing the last known state."
@@ -392,8 +756,17 @@ Panel {
         errorText = ""
         return
       }
+      if (parsed && parsed.ok === true && parsed.requested_fan_mode !== undefined) {
+        if (parsed.entity_id) selectedEntity = String(parsed.entity_id)
+        fanModeInFlight = ""
+        errorText = ""
+        return
+      }
       if (parsed && parsed.ok === true && parsed.requested_mode !== undefined) {
         if (parsed.entity_id) selectedEntity = String(parsed.entity_id)
+        if (actionKind === "mode") modeInFlight = ""
+        if (parsed.restarting === true) root.beginModeRestart()
+        else root.clearModeRestart()
         errorText = ""
         return
       }
@@ -430,6 +803,17 @@ Panel {
           localTarget = null
           lastTemperatureSent = null
         }
+        if (source === "status" && localMode !== ""
+            && sameControlValue(parsed.state, localMode)) {
+          if (modeRestarting) root.clearModeRestart()
+          localMode = ""
+          modeInFlight = ""
+        }
+        if (source === "status" && localFanMode !== ""
+            && sameControlValue(parsed.fan_mode, localFanMode)) {
+          localFanMode = ""
+          fanModeInFlight = ""
+        }
         errorText = ""
       } else {
         if (source === "action" && hasLocalPower) {
@@ -443,13 +827,7 @@ Panel {
           errorText = finalStatusError + "; showing the last known state."
           return
         }
-        if (source === "action" && actionKind === "temperature") {
-          var failedTarget = temperatureInFlight
-          if (failedTarget !== null && (!hasLocalTarget || sameTemperature(localTarget, failedTarget))) {
-            localTarget = null
-            lastTemperatureSent = null
-          }
-        }
+        if (source === "action") root.rejectLocalAction()
         if (parsed && parsed.entity_ids && parsed.entity_ids.length > 0) {
           mergeEntityIds(parsed.entity_ids)
           errorText = "Choose an air conditioner from the device list."
@@ -467,6 +845,7 @@ Panel {
         errorText = "Home Assistant returned invalid status data; showing the last known state."
         return
       }
+      if (source === "action") root.rejectLocalAction()
       errorText = "The controller returned invalid data."
     }
   }
@@ -477,11 +856,196 @@ Panel {
     pendingEntity = next
     localTarget = null
     root.clearLocalPower()
+    root.clearLocalClimateControls()
     lastTemperatureSent = null
     actionKind = "entity"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-entity", next]
     actionProcess.running = true
+  }
+
+  function queueControl(kind, value) {
+    queuedControlKind = kind
+    queuedControlValue = value
+  }
+
+  function dispatchModeRequest(value) {
+    modeInFlight = value
+    actionKind = "mode"
+    actionBusy = true
+    actionProcess.command = ["python3", root.helperPath, "set-mode", value]
+    actionProcess.running = true
+  }
+
+  function dispatchFanModeRequest(value) {
+    fanModeInFlight = value
+    actionKind = "fan"
+    actionBusy = true
+    actionProcess.command = ["python3", root.helperPath, "set-fan-mode", value]
+    actionProcess.running = true
+  }
+
+  function requestMode(value) {
+    var next = String(value || "").trim()
+    if (!next || !connected || (!isOn && localMode === "")) return
+    if (sameControlValue(next, activeMode) && localMode === "") return
+    localMode = next
+    root.beginModeRestart()
+    errorText = ""
+    if (actionProcess.running) {
+      root.queueControl("mode", next)
+      return
+    }
+    root.dispatchModeRequest(next)
+  }
+
+  function requestFanMode(value) {
+    var next = String(value || "").trim()
+    if (!next || !connected || !isOn) return
+    if (sameControlValue(next, activeFanMode) && localFanMode === "") return
+    localFanMode = next
+    errorText = ""
+    if (actionProcess.running) {
+      root.queueControl("fan", next)
+      return
+    }
+    root.dispatchFanModeRequest(next)
+  }
+
+  function setAdvancedControlsEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === advancedControls) return
+    advancedControlsPrevious = advancedControls
+    advancedControls = next
+    preferenceKind = "advanced_controls"
+    preferenceBusy = true
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "advanced_controls", next ? "on" : "off"
+    ]
+    preferenceProcess.running = true
+  }
+
+  function setTemperatureDisplay(value) {
+    var next = String(value || "").trim().toLowerCase()
+    if (preferenceProcess.running || ["ambient", "target", "both"].indexOf(next) === -1) return
+    if (next === temperatureDisplay) return
+    temperatureDisplayPrevious = temperatureDisplay
+    temperatureDisplay = next
+    preferenceKind = "temperature_display"
+    preferenceBusy = true
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "temperature_display", next
+    ]
+    preferenceProcess.running = true
+  }
+
+  function setHistoryEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === historyEnabled) return
+    historyEnabledPrevious = historyEnabled
+    historyEnabled = next
+    preferenceKind = "history_enabled"
+    preferenceBusy = true
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "history_enabled", next ? "on" : "off"
+    ]
+    preferenceProcess.running = true
+  }
+
+  function setHistoryRange(value, custom, force) {
+    if (preferenceProcess.running) return
+    var next = normalizeHistoryHours(value)
+    if (!isFinite(Number(value)) || next < 1 || next > 24) return
+    var nextCustom = custom === true
+    if (!force && next === historyHours && nextCustom === historyCustom) return
+    historyHoursPrevious = historyHours
+    historyCustomPrevious = historyCustom
+    historyHours = next
+    historyCustom = nextCustom
+    customHistoryHoursText = formatHours(next)
+    preferenceKind = "history_range"
+    preferenceBusy = true
+    var encoded = nextCustom ? "custom:" + formatHours(next) : formatHours(next)
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "history_range", encoded
+    ]
+    preferenceProcess.running = true
+  }
+
+  function chooseHistoryRange(value) {
+    var next = String(value || "")
+    if (next === "custom") {
+      customHistoryHoursText = formatHours(historyHours)
+      if (!historyCustom) root.setHistoryRange(historyHours, true)
+      return
+    }
+    root.setHistoryRange(next, false)
+  }
+
+  function applyCustomHistoryRange() {
+    var next = Number(String(customHistoryHoursText || "").trim())
+    if (!isFinite(next) || next < 1 || next > 24) {
+      setupError = "Custom history must be between 1 and 24 hours."
+      return
+    }
+    root.setHistoryRange(next, true, true)
+    setupError = ""
+  }
+
+  function restorePreference(kind) {
+    if (kind === "advanced_controls") advancedControls = advancedControlsPrevious
+    else if (kind === "temperature_display") temperatureDisplay = temperatureDisplayPrevious
+    else if (kind === "history_enabled") historyEnabled = historyEnabledPrevious
+    else if (kind === "history_range") {
+      historyHours = historyHoursPrevious
+      historyCustom = historyCustomPrevious
+      customHistoryHoursText = formatHours(historyHours)
+    }
+  }
+
+  function applyPreferenceResult(raw) {
+    var text = String(raw || "").trim()
+    if (text === "") {
+      root.restorePreference(preferenceKind)
+      setupError = "The preference could not be saved."
+      return
+    }
+    try {
+      var parsed = JSON.parse(text)
+      if (parsed && parsed.ok === true) {
+        if (parsed.preference === "advanced_controls" && parsed.value !== undefined) {
+          advancedControls = parsed.value === true
+          advancedControlsPrevious = advancedControls
+        } else if (parsed.preference === "temperature_display" && parsed.value !== undefined) {
+          temperatureDisplay = String(parsed.value)
+          temperatureDisplayPrevious = temperatureDisplay
+        } else if (parsed.preference === "history_enabled" && parsed.value !== undefined) {
+          historyEnabled = parsed.value === true
+          historyEnabledPrevious = historyEnabled
+        } else if (parsed.preference === "history_range"
+            && parsed.history_hours !== undefined) {
+          historyHours = root.normalizeHistoryHours(parsed.history_hours)
+          historyCustom = parsed.history_custom === true
+          historyHoursPrevious = historyHours
+          historyCustomPrevious = historyCustom
+          customHistoryHoursText = root.formatHours(historyHours)
+        } else {
+          root.restorePreference(preferenceKind)
+          setupError = "The preference returned incomplete data."
+          return
+        }
+        setupError = ""
+        return
+      }
+      root.restorePreference(preferenceKind)
+      setupError = parsed && parsed.error
+        ? String(parsed.error) : "The preference could not be saved."
+    } catch (e) {
+      root.restorePreference(preferenceKind)
+      setupError = "The preference returned invalid data."
+    }
   }
 
   function adjustTarget(direction) {
@@ -538,7 +1102,7 @@ Panel {
   }
 
   function togglePower() {
-    if (actionProcess.running || !connected || hasLocalPower) return
+    if (actionProcess.running || !connected || hasLocalPower || modeRestarting) return
     root.requestPower(isOn ? "off" : "on", true)
   }
 
@@ -557,6 +1121,48 @@ Panel {
       waitForEnd: true
       onStreamFinished: if (String(text || "").trim() !== "") console.warn("aircon-control", text.trim())
     }
+  }
+
+  Process {
+    id: preferenceProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyPreferenceResult(text)
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("aircon-control", text.trim())
+    }
+    onExited: {
+      root.preferenceBusy = false
+      root.preferenceKind = ""
+    }
+  }
+
+  Process {
+    id: localServerProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyLocalServerResult(text)
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("homeassistant-local-setup", text.trim())
+    }
+    onExited: root.localServerBusy = false
+  }
+
+  Process {
+    id: resetAppProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyResetAppResult(text)
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("homeassistant-ac-reset", text.trim())
+    }
+    onExited: root.resetAppBusy = false
   }
 
   Process {
@@ -620,17 +1226,28 @@ Panel {
     onExited: {
       var completedKind = actionKind
       var queuedPower = queuedPowerRequest
+      var queuedControl = queuedControlKind
+      var queuedValue = queuedControlValue
       if (completedKind === "temperature") {
         var completedTarget = temperatureInFlight
         temperatureInFlight = null
         if (hasLocalTarget && completedTarget !== null && !sameTemperature(localTarget, completedTarget))
           temperatureCommitTimer.restart()
       }
+      if (completedKind === "mode") modeInFlight = ""
+      if (completedKind === "fan") fanModeInFlight = ""
       actionBusy = false
       actionKind = ""
       if (queuedPower !== "") {
         queuedPowerRequest = ""
         Qt.callLater(function() { root.dispatchPowerRequest(queuedPower) })
+      } else if (queuedControl !== "") {
+        queuedControlKind = ""
+        queuedControlValue = ""
+        if (queuedControl === "mode")
+          Qt.callLater(function() { root.dispatchModeRequest(queuedValue) })
+        else if (queuedControl === "fan")
+          Qt.callLater(function() { root.dispatchFanModeRequest(queuedValue) })
       } else if (completedKind === "power") {
         Qt.callLater(root.refreshStatus)
       } else {
@@ -659,6 +1276,42 @@ Panel {
     }
   }
 
+  Timer {
+    id: modeRestartTimer
+    interval: 500
+    repeat: true
+    running: root.modeRestarting
+    onTriggered: {
+      if (!root.modeRestarting) return
+      if (Date.now() - root.modeRestartStartedAt >= 15000) {
+        root.clearModeRestart()
+        root.errorText = "The AC did not come back on after switching modes. Try TURN ON to retry."
+        return
+      }
+      if (!root.actionProcess.running && !root.statusProcess.running) root.refreshStatus()
+    }
+  }
+
+  Timer {
+    id: setupTransitionTimer
+    interval: 180
+    repeat: false
+    onTriggered: {
+      root.setupOpen = true
+      Qt.callLater(function() {
+        if (root.setupOpen && root.setupTransitioning) setupUrlField.forceActiveFocus()
+      })
+      setupTransitionFinishTimer.restart()
+    }
+  }
+
+  Timer {
+    id: setupTransitionFinishTimer
+    interval: 360
+    repeat: false
+    onTriggered: root.setupTransitioning = false
+  }
+
   readonly property int pollSeconds: Math.max(15, Number(setting("poll_seconds", 30)) || 30)
   Timer {
     interval: root.pollSeconds * 1000
@@ -668,7 +1321,15 @@ Panel {
     onTriggered: root.refresh()
   }
 
-  onOpenedChanged: if (opened) root.refresh()
+  onOpenedChanged: {
+    if (opened) {
+      root.refresh()
+    } else {
+      setupTransitionTimer.stop()
+      setupTransitionFinishTimer.stop()
+      setupTransitioning = false
+    }
+  }
 
   IpcHandler {
     target: root.ipcTarget
@@ -691,12 +1352,16 @@ Panel {
     contentHeight: panel.fittedContentHeight(root.setupOpen
       ? onboardingColumn.implicitHeight : column.implicitHeight)
 
+    Behavior on contentHeight {
+      NumberAnimation { duration: 280; easing.type: Easing.OutCubic }
+    }
+
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.setupOpen && (setupUrlField.activeFocus
         || setupTokenField.activeFocus || setupEntityDropdown.popupOpen)
-      onCloseRequested: root.close()
+      onCloseRequested: root.setupOpen && root.configured ? root.cancelSetup() : root.close()
       onActivateRequested: root.refresh()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
@@ -709,10 +1374,25 @@ Panel {
         }
       }
 
+      Flickable {
+        id: panelScroll
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: root.setupOpen
+          ? onboardingColumn.implicitHeight : column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
+
+        Connections {
+          target: root
+          function onSetupOpenChanged() { panelScroll.contentY = 0 }
+        }
+
       Column {
         id: onboardingColumn
         visible: root.setupOpen
-        anchors.fill: parent
+        width: parent.width
         spacing: Style.space(10)
 
         BorderSurface {
@@ -789,6 +1469,26 @@ Panel {
             anchors.margins: Style.space(16)
             spacing: Style.space(9)
 
+            Button {
+              id: backToControlsButton
+              visible: root.configured
+              width: parent.width
+              height: Style.space(38)
+              text: "BACK TO AC CONTROLS"
+              iconText: "←"
+              iconSize: Style.font.body
+              fontSize: Style.font.bodySmall
+              enabled: !root.setupBusy && !root.localServerBusy && !root.setupTransitioning
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: Color.accent
+              background: root.alpha(Color.accent, 0.08)
+              bordered: true
+              radius: root.compactRadius
+              tooltipText: "Return to the AC controls"
+              onClicked: root.cancelSetup()
+            }
+
             Row {
               width: parent.width
               spacing: Style.space(8)
@@ -836,7 +1536,7 @@ Panel {
             TextField {
               id: setupUrlField
               width: parent.width
-              enabled: !root.setupBusy
+              enabled: !root.setupBusy && !root.localServerBusy
               placeholderText: "http://homeassistant.local:8123"
               text: root.setupUrl
               foreground: root.foreground
@@ -870,7 +1570,7 @@ Panel {
             TextField {
               id: setupTokenField
               width: parent.width
-              enabled: !root.setupBusy
+              enabled: !root.setupBusy && !root.localServerBusy
               password: true
               placeholderText: root.configured
                 ? "Paste a new token to replace the saved one"
@@ -887,7 +1587,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Create one in Home Assistant → your profile → Security → Long-Lived Access Tokens."
+              text: "In Home Assistant, open your profile → Security → Long-Lived Access Tokens → Create Token. Copy it immediately, Home Assistant only shows it once, then paste it here."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -980,7 +1680,7 @@ Panel {
                 height: Style.space(40)
                 text: "CANCEL"
                 fontSize: Style.font.bodySmall
-                enabled: !root.setupBusy
+                enabled: !root.setupBusy && !root.localServerBusy
                 fontFamily: root.fontFamily
                 foreground: root.foreground
                 accent: Color.accent
@@ -1019,26 +1719,626 @@ Panel {
                 }
               }
             }
+
+            Text {
+              width: parent.width
+              text: root.configured
+                ? "Changing this connection replaces the saved Home Assistant token."
+                : "The Daikin AC integration must already be set up in Home Assistant."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+            }
           }
         }
 
-        Text {
+        BorderSurface {
+          id: localServerCard
           width: parent.width
-          text: root.configured
-            ? "Changing this connection replaces the saved Home Assistant token."
-            : "The Daikin AC integration must already be set up in Home Assistant."
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          horizontalAlignment: Text.AlignHCenter
-          wrapMode: Text.WordWrap
+          implicitHeight: localServerForm.implicitHeight + Style.space(32)
+          radius: root.panelRadius
+          color: root.alpha(Color.accent, 0.035)
+          borderSpec: Border.flat(root.alpha(Color.accent, 0.20), 1)
+
+          Column {
+            id: localServerForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(16)
+            spacing: Style.space(9)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(9)
+
+              Text {
+                width: Style.space(30)
+                height: Style.space(30)
+                text: "󰒓"
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.display
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+              }
+
+              Column {
+                width: parent.width - Style.space(39)
+                spacing: Style.space(1)
+
+                Text {
+                  width: parent.width
+                  text: root.configured ? "RUN HOME ASSISTANT LOCALLY" : "NO SERVER YET?"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+
+                Text {
+                  width: parent.width
+                  text: "Create a self-hosted Home Assistant server on this PC for your Daikin setup."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  wrapMode: Text.WordWrap
+                }
+              }
+            }
+
+            BorderSurface {
+              width: parent.width
+              implicitHeight: localServerDetails.implicitHeight + Style.space(18)
+              color: root.alpha(root.foreground, 0.025)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+              radius: root.compactRadius
+
+              Text {
+                id: localServerDetails
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: "This pulls the official Home Assistant Container image, stores its data in ~/.local/share/omarchy/homeassistant by default, and keeps it running through Docker. You still need to finish Home Assistant onboarding, add the Daikin integration, and create a long-lived token."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Docker may ask for administrator permission to install or start its service. Host networking helps local AC discovery, so your firewall controls whether other devices can reach Home Assistant."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                id: localServerButton
+                width: parent.width - localServerGuideButton.width - parent.spacing
+                height: Style.space(40)
+                text: root.localServerBusy
+                  ? "SETTING UP…"
+                  : root.localServerReady ? "OPEN HOME ASSISTANT" : "SET UP LOCALLY"
+                iconText: root.localServerBusy ? "" : root.localServerReady ? "↗" : "󰒓"
+                iconSize: Style.font.body
+                fontSize: Style.font.bodySmall
+                fontFamily: root.fontFamily
+                foreground: Color.popups.background
+                accent: Color.accent
+                background: Color.accent
+                bordered: false
+                radius: root.compactRadius
+                enabled: !root.localServerBusy && !root.setupBusy && !root.preferenceBusy
+                onClicked: root.localServerReady
+                  ? root.openLocalServer() : root.startLocalServer()
+
+                LoadingRing {
+                  visible: root.localServerBusy
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(14)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(16)
+                  height: width
+                  color: Color.popups.background
+                  strokeWidth: Style.space(2)
+                }
+              }
+
+              Button {
+                id: localServerGuideButton
+                width: Style.space(78)
+                height: Style.space(40)
+                text: "GUIDE"
+                fontSize: Style.font.caption
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: Color.accent
+                background: root.alpha(root.foreground, 0.025)
+                bordered: true
+                radius: root.compactRadius
+                tooltipText: root.homeAssistantLinuxGuideUrl
+                enabled: !root.localServerBusy
+                onClicked: Qt.openUrlExternally(root.homeAssistantLinuxGuideUrl)
+              }
+            }
+
+            BorderSurface {
+              visible: root.localServerMessage !== "" || root.localServerError !== ""
+              width: parent.width
+              implicitHeight: localServerStatus.implicitHeight + Style.space(18)
+              color: root.alpha(root.localServerError !== "" ? root.urgent : Color.accent, 0.09)
+              borderSpec: Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : Color.accent, 0.32), 1)
+              radius: root.compactRadius
+
+              Text {
+                id: localServerStatus
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: root.localServerError !== ""
+                  ? root.localServerError : root.localServerMessage
+                color: root.localServerError !== "" ? root.urgent : Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: advancedSettingsCard
+          width: parent.width
+          implicitHeight: advancedSettingsForm.implicitHeight + Style.space(32)
+          radius: root.panelRadius
+          color: root.alpha(Color.accent, 0.035)
+          borderSpec: Border.flat(root.alpha(Color.accent, 0.20), 1)
+
+          Column {
+            id: advancedSettingsForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(16)
+            spacing: Style.space(9)
+
+            Text {
+              width: parent.width
+              text: "ADVANCED OPTIONS"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Optional controls stay hidden until you ask for them. All choices are saved locally."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Advanced climate controls"
+              description: "Show supported climate modes and fan speeds in the main panel."
+              checked: root.advancedControls
+              enabled: !root.setupBusy && !root.preferenceBusy
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.setAdvancedControlsEnabled(!root.advancedControls)
+            }
+
+            Text {
+              width: parent.width
+              text: "BAR TEMPERATURES"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 0.8
+            }
+
+            Text {
+              width: parent.width
+              text: "Choose whether the bar shows the ambient temperature, target temperature, or both."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              id: temperatureDisplayChoices
+              width: parent.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: [
+                  { value: "ambient", label: "AMBIENT" },
+                  { value: "target", label: "TARGET" },
+                  { value: "both", label: "BOTH" },
+                ]
+
+                Button {
+                  required property var modelData
+                  width: (temperatureDisplayChoices.width
+                    - temperatureDisplayChoices.spacing * 2) / 3
+                  height: Style.space(34)
+                  text: modelData.label
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
+                  foreground: root.foreground
+                  accent: Color.accent
+                  background: root.alpha(root.foreground, 0.025)
+                  bordered: true
+                  selected: root.temperatureDisplay === modelData.value
+                  enabled: !root.preferenceBusy
+                  radius: root.compactRadius
+                  tooltipText: "Show " + modelData.label.toLowerCase() + " temperature in the bar"
+                  onClicked: root.setTemperatureDisplay(modelData.value)
+                }
+              }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Temperature history for nerds"
+              description: "Show a local ambient-temperature chart in the main panel."
+              checked: root.historyEnabled
+              enabled: !root.setupBusy && !root.preferenceBusy
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.setHistoryEnabled(!root.historyEnabled)
+            }
+
+            Column {
+              visible: root.historyEnabled
+              width: parent.width
+              spacing: Style.space(7)
+
+              Text {
+                width: parent.width
+                text: "CHART RANGE"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Row {
+                id: historyRangeChoices
+                width: parent.width
+                spacing: Style.space(5)
+
+                Repeater {
+                  model: root.historyRangeOptions
+
+                  Button {
+                    required property var modelData
+                    width: (historyRangeChoices.width
+                      - historyRangeChoices.spacing * (root.historyRangeOptions.length - 1))
+                      / root.historyRangeOptions.length
+                    height: Style.space(34)
+                    text: modelData.label
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(2)
+                    foreground: root.foreground
+                    accent: Color.accent
+                    background: root.alpha(root.foreground, 0.025)
+                    bordered: true
+                    selected: modelData.value === "custom"
+                      ? root.historyCustom
+                      : !root.historyCustom && root.historyHours === Number(modelData.value)
+                    enabled: !root.preferenceBusy
+                    radius: root.compactRadius
+                    tooltipText: modelData.value === "custom"
+                      ? "Use a custom chart range from 1 to 24 hours"
+                      : "Show the last " + modelData.label.toLowerCase()
+                    onClicked: root.chooseHistoryRange(modelData.value)
+                  }
+                }
+              }
+
+              Row {
+                visible: root.historyCustom
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: customHistoryHoursField
+                  width: parent.width - applyCustomHistoryButton.width - parent.spacing
+                  height: Style.space(38)
+                  text: root.customHistoryHoursText
+                  placeholderText: "Hours (1–24)"
+                  enabled: !root.preferenceBusy
+                  foreground: root.foreground
+                  accent: Color.accent
+                  font.family: root.fontFamily
+                  inputMethodHints: Qt.ImhFormattedNumbersOnly
+                  selectByMouse: true
+                  onTextChanged: if (text !== root.customHistoryHoursText)
+                    root.customHistoryHoursText = text
+                  onAccepted: root.applyCustomHistoryRange()
+                }
+
+                Button {
+                  id: applyCustomHistoryButton
+                  width: Style.space(76)
+                  height: Style.space(38)
+                  text: "APPLY"
+                  fontSize: Style.font.caption
+                  enabled: !root.preferenceBusy
+                  foreground: Color.popups.background
+                  accent: Color.accent
+                  background: Color.accent
+                  bordered: false
+                  radius: root.compactRadius
+                  onClicked: root.applyCustomHistoryRange()
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: "The latest 24 hours are logged locally on this PC. The PC must be active for new readings; sleep, shutdown, or offline periods remain empty in the chart."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: aboutCard
+          width: parent.width
+          implicitHeight: aboutForm.implicitHeight + Style.space(32)
+          radius: root.panelRadius
+          color: root.alpha(root.foreground, 0.025)
+          borderSpec: Border.flat(root.alpha(root.foreground, 0.14), 1)
+
+          Column {
+            id: aboutForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(16)
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              text: "ABOUT & HELP"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Daikin Air for Omarchy · Made by Sai"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Find setup help, Home Assistant notes, and future tutorials on the project page."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              width: parent.width
+              height: Style.space(40)
+              text: "OPEN GITHUB HELP"
+              iconText: "󰊤"
+              iconSize: Style.font.body
+              fontSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: Color.accent
+              background: root.alpha(Color.accent, 0.09)
+              bordered: true
+              radius: root.compactRadius
+              tooltipText: root.githubUrl
+              onClicked: Qt.openUrlExternally(root.githubUrl)
+            }
+          }
+        }
+
+        BorderSurface {
+          id: appDataCard
+          width: parent.width
+          implicitHeight: appDataForm.implicitHeight + Style.space(32)
+          radius: root.panelRadius
+          color: root.alpha(root.urgent, 0.025)
+          borderSpec: Border.flat(root.alpha(root.urgent, 0.20), 1)
+
+          Column {
+            id: appDataForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(16)
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              text: "APP DATA"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Start Daikin Air over from its first-run setup when you need to test onboarding again."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            BorderSurface {
+              width: parent.width
+              implicitHeight: appDataWarning.implicitHeight + Style.space(18)
+              color: root.alpha(root.urgent, 0.07)
+              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+              radius: root.compactRadius
+
+              Text {
+                id: appDataWarning
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: "This removes Daikin Air's saved server address, token, selected entity, preferences, and local temperature history. It does not reset Home Assistant, its Docker container, or any Home Assistant data."
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            Button {
+              visible: !root.resetAppConfirming
+              width: parent.width
+              height: Style.space(40)
+              text: "RESET APP"
+              fontSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              foreground: root.urgent
+              accent: root.urgent
+              background: root.alpha(root.urgent, 0.07)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.resetAppBusy && !root.setupBusy && !root.localServerBusy
+                && !root.preferenceBusy && !configProcess.running && !entitiesProcess.running
+              onClicked: root.requestResetApp()
+            }
+
+            Column {
+              visible: root.resetAppConfirming
+              width: parent.width
+              spacing: Style.space(7)
+
+              Text {
+                width: parent.width
+                text: "Are you sure? Your Home Assistant server and its data will remain untouched."
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                wrapMode: Text.WordWrap
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Button {
+                  id: resetCancelButton
+                  width: Style.space(86)
+                  height: Style.space(40)
+                  text: "CANCEL"
+                  fontSize: Style.font.bodySmall
+                  fontFamily: root.fontFamily
+                  foreground: root.foreground
+                  accent: root.urgent
+                  background: root.alpha(root.foreground, 0.025)
+                  bordered: true
+                  radius: root.compactRadius
+                  enabled: !root.resetAppBusy
+                  onClicked: root.cancelResetApp()
+                }
+
+                Button {
+                  id: resetConfirmButton
+                  width: parent.width - resetCancelButton.width - parent.spacing
+                  height: Style.space(40)
+                  text: root.resetAppBusy ? "RESETTING…" : "RESET NOW"
+                  fontSize: Style.font.bodySmall
+                  fontFamily: root.fontFamily
+                  foreground: Color.popups.background
+                  accent: root.urgent
+                  background: root.urgent
+                  bordered: false
+                  radius: root.compactRadius
+                  enabled: !root.resetAppBusy
+                  onClicked: root.resetApp()
+
+                  LoadingRing {
+                    visible: root.resetAppBusy
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(14)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(16)
+                    height: width
+                    color: Color.popups.background
+                    strokeWidth: Style.space(2)
+                  }
+                }
+              }
+            }
+
+            BorderSurface {
+              visible: root.resetAppMessage !== "" || root.resetAppError !== ""
+              width: parent.width
+              implicitHeight: appDataStatus.implicitHeight + Style.space(18)
+              color: root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.09)
+              borderSpec: Border.flat(root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.32), 1)
+              radius: root.compactRadius
+
+              Text {
+                id: appDataStatus
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: root.resetAppError !== ""
+                  ? root.resetAppError : root.resetAppMessage
+                color: root.resetAppError !== "" ? root.urgent : Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+            }
+          }
         }
       }
 
       Column {
         id: column
         visible: !root.setupOpen
-        anchors.fill: parent
+        width: parent.width
         spacing: Style.space(10)
 
         BorderSurface {
@@ -1094,8 +2394,12 @@ Panel {
               }
 
               Text {
+                width: Style.space(36)
+                height: Style.space(36)
                 anchors.centerIn: parent
-                text: "󰜗"
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                text: root.climateModeIcon(root.activeMode)
                 color: root.isOn ? Color.accent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -1478,12 +2782,13 @@ Panel {
           Button {
             anchors.fill: parent
             visible: opacity > 0
-            opacity: root.hasLocalPower ? 0 : 1
+            opacity: root.hasLocalPower || root.modeRestarting ? 0 : 1
             iconText: "⏻"
             iconSize: Style.font.display
             text: root.isOn ? "TURN OFF" : "TURN ON"
             fontSize: Style.font.bodySmall
-            enabled: root.connected && !root.actionBusy && !root.hasLocalPower
+            enabled: root.connected && !root.actionBusy
+              && !root.hasLocalPower && !root.modeRestarting
             fontFamily: root.fontFamily
             foreground: root.isOn ? Color.accent : root.foreground
             accent: Color.accent
@@ -1498,7 +2803,7 @@ Panel {
           Row {
             anchors.fill: parent
             visible: opacity > 0
-            opacity: root.hasLocalPower ? 1 : 0
+            opacity: root.hasLocalPower || root.modeRestarting ? 1 : 0
             spacing: cancelPowerButton.width > 0 ? Style.space(8) : 0
 
             Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -1524,7 +2829,8 @@ Panel {
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.localPower ? "POWERING ON…" : "POWERING OFF…"
+                  text: root.modeRestarting ? "RESTARTING AC…"
+                    : root.localPower ? "POWERING ON…" : "POWERING OFF…"
                   color: Color.accent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
@@ -1560,6 +2866,129 @@ Panel {
           }
         }
 
+        Column {
+          id: advancedClimateSection
+          width: parent.width
+          visible: root.advancedControlsVisible
+          spacing: Style.space(8)
+          opacity: visible ? 1 : 0
+
+          Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+
+          BorderSurface {
+            width: parent.width
+            implicitHeight: advancedClimateForm.implicitHeight + Style.space(28)
+            radius: root.panelRadius
+            color: root.alpha(Color.accent, 0.045)
+            borderSpec: Border.flat(root.alpha(Color.accent, 0.25), 1)
+
+            Column {
+              id: advancedClimateForm
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(14)
+              spacing: Style.space(8)
+
+              Row {
+                width: parent.width
+                spacing: Style.space(9)
+
+                Text {
+                  width: Style.space(30)
+                  height: Style.space(30)
+                  text: root.climateModeIcon(root.activeMode)
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                  horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
+                }
+
+                Column {
+                  width: parent.width - Style.space(39)
+                  spacing: Style.space(1)
+
+                  Text {
+                    text: "ADVANCED CLIMATE"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.subtitle
+                    font.bold: true
+                  }
+
+                  Text {
+                    width: parent.width
+                    text: "Changes preview instantly, then sync with Home Assistant."
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                AcDropdown {
+                  id: modeControl
+                  visible: root.modeOptions.length > 0
+                  width: root.modeOptions.length > 0
+                    ? (root.fanModeOptions.length > 0
+                      ? (parent.width - parent.spacing) / 2 : parent.width) : 0
+                  label: "MODE"
+                  options: root.modeDropdownOptions
+                  value: root.activeMode
+                  foreground: root.foreground
+                  background: Color.popups.background
+                  popupBorder: Color.popups.border
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  controlRadius: root.compactRadius
+                  enabled: root.connected && (root.isOn || root.localMode !== "") && !root.actionBusy
+                  onChanged: function(value) { root.requestMode(value) }
+                }
+
+                AcDropdown {
+                  id: fanModeControl
+                  visible: root.fanModeOptions.length > 0
+                  width: root.fanModeOptions.length > 0
+                    ? (root.modeOptions.length > 0
+                      ? (parent.width - parent.spacing) / 2 : parent.width) : 0
+                  label: "FAN SPEED"
+                  options: root.fanModeDropdownOptions
+                  value: root.activeFanMode
+                  foreground: root.foreground
+                  background: Color.popups.background
+                  popupBorder: Color.popups.border
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  controlRadius: root.compactRadius
+                  enabled: root.connected && root.isOn && !root.actionBusy
+                  onChanged: function(value) { root.requestFanMode(value) }
+                }
+              }
+            }
+          }
+        }
+
+        TemperatureHistoryChart {
+          id: temperatureHistoryChart
+          width: parent.width
+          visible: root.historyChartVisible
+          height: visible ? implicitHeight : 0
+          points: root.historyPoints
+          rangeHours: root.historyHours
+          unit: root.unit
+          foreground: root.foreground
+          accent: Color.accent
+          background: root.alpha(root.foreground, 0.035)
+          borderColor: root.alpha(root.foreground, 0.14)
+          fontFamily: root.fontFamily
+        }
+
         BorderSurface {
           visible: root.errorText !== ""
           width: parent.width
@@ -1584,6 +3013,111 @@ Panel {
         }
 
       }
+      }
+
+        Item {
+          id: setupTransitionOverlay
+          anchors.fill: parent
+          z: 20
+          visible: root.setupTransitioning || opacity > 0.01
+          opacity: root.setupTransitioning ? 1 : 0
+          scale: root.setupTransitioning ? 1 : 0.985
+          transformOrigin: Item.Center
+
+          Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+          Behavior on scale { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+
+          BorderSurface {
+            anchors.fill: parent
+            color: root.alpha(Color.popups.background, 0.96)
+            borderSpec: Border.flat(root.alpha(Color.accent, 0.22), 1)
+            radius: root.panelRadius
+          }
+
+          BorderSurface {
+            id: setupSplashCard
+            anchors.centerIn: parent
+            width: Math.min(parent.width - Style.space(24), Style.space(300))
+            height: Style.space(136)
+            radius: root.nestedRadius
+            color: root.alpha(Color.accent, 0.075)
+            gradient: Gradient {
+              GradientStop { position: 0.0; color: root.alpha(Color.accent, 0.18) }
+              GradientStop { position: 1.0; color: root.alpha(Color.accent, 0.035) }
+            }
+            borderSpec: Border.flat(root.alpha(Color.accent, 0.42), 1)
+
+            Column {
+              anchors.centerIn: parent
+              width: parent.width - Style.space(28)
+              spacing: Style.space(5)
+
+              Item {
+                width: Style.space(42)
+                height: width
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                Rectangle {
+                  anchors.centerIn: parent
+                  width: Style.space(38)
+                  height: width
+                  radius: width / 2
+                  color: Color.accent
+                  opacity: 0.14
+                  scale: root.setupTransitioning ? 1.15 : 0.7
+
+                  Behavior on scale { NumberAnimation { duration: 520; easing.type: Easing.OutBack } }
+                }
+
+                Text {
+                  anchors.fill: parent
+                  text: "󰒓"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                  horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
+
+                  RotationAnimation on rotation {
+                    from: 0
+                    to: 360
+                    duration: 1050
+                    loops: Animation.Infinite
+                    running: root.setupTransitioning
+                  }
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: "CONNECTION SETTINGS"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              Text {
+                width: parent.width
+                text: "Preparing a fresh Home Assistant connection."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+              }
+            }
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            z: 10
+            enabled: root.setupTransitioning
+            acceptedButtons: Qt.AllButtons
+          }
+        }
+
+      }
     }
   }
-}

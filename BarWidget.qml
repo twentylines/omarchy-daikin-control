@@ -22,6 +22,7 @@ BarWidget {
   function togglePower() {
     var panel = panelLoader.item
     if (!panel) return
+    if (panel.modeRestarting) return
     if (panel.hasLocalPower && panel.powerCanCancel && panel.cancelPower)
       panel.cancelPower()
     else if (panel.togglePower)
@@ -30,7 +31,8 @@ BarWidget {
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
-  readonly property bool powerPending: panelLoader.item ? panelLoader.item.hasLocalPower === true : false
+  readonly property bool powerPending: panelLoader.item
+    ? panelLoader.item.hasLocalPower === true || panelLoader.item.modeRestarting === true : false
 
   function open() {
     if (panelLoader.item && panelLoader.item.openFromHotkey) panelLoader.item.openFromHotkey()
@@ -97,7 +99,8 @@ BarWidget {
           anchors.centerIn: parent
           width: Style.bar.iconCanvas
           height: Style.bar.iconCanvas
-          text: "󰜗"
+          text: panelLoader.item
+            ? panelLoader.item.climateModeIcon(panelLoader.item.activeMode) : "󰜗"
           visible: !root.powerPending
           color: button.active && button.useActiveColor ? button.activeColor : button.foreground
           fontFamily: button.fontFamily
@@ -125,6 +128,7 @@ BarWidget {
         spacing: Style.spacing.lg
 
         Text {
+          visible: panelLoader.item ? panelLoader.item.showAmbientOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
           text: panelLoader.item ? panelLoader.item.ambientText : ""
@@ -136,6 +140,8 @@ BarWidget {
         }
 
         Text {
+          visible: panelLoader.item
+            ? panelLoader.item.showAmbientOnBar && panelLoader.item.showTargetOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
           text: "→"
@@ -147,6 +153,7 @@ BarWidget {
         }
 
         Text {
+          visible: panelLoader.item ? panelLoader.item.showTargetOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
           text: panelLoader.item ? panelLoader.item.targetText : ""
@@ -166,9 +173,23 @@ BarWidget {
         spacing: Style.spacing.lg
 
         Text {
+          visible: panelLoader.item ? panelLoader.item.showAmbientOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
-          text: "·"
+          text: panelLoader.item ? panelLoader.item.ambientText : ""
+          color: button.foreground
+          font.family: button.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          renderType: Text.NativeRendering
+          verticalAlignment: Text.AlignVCenter
+        }
+
+        Text {
+          visible: panelLoader.item
+            ? panelLoader.item.showAmbientOnBar && panelLoader.item.showTargetOnBar : true
+          width: implicitWidth
+          height: Style.bar.iconCanvas
+          text: "→"
           color: button.foreground
           font.family: button.fontFamily
           font.pixelSize: Style.font.caption
@@ -177,9 +198,21 @@ BarWidget {
         }
 
         Text {
+          visible: panelLoader.item ? panelLoader.item.showTargetOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
-          text: "OFF"
+          text: panelLoader.item ? panelLoader.item.targetText : ""
+          color: button.foreground
+          font.family: button.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          renderType: Text.NativeRendering
+          verticalAlignment: Text.AlignVCenter
+        }
+
+        Text {
+          width: implicitWidth
+          height: Style.bar.iconCanvas
+          text: "· OFF"
           color: Qt.darker(button.foreground, 1.35)
           font.family: button.fontFamily
           font.pixelSize: Style.font.bodySmall
