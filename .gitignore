@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Never commit local Home Assistant credentials or exported config files.
+home-assistant-ac.json
+*.secret

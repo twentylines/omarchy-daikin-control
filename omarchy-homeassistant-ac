@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""Small Home Assistant client for the Omarchy AC bar widget.
+
+The access token stays in the user-owned JSON config and is never printed.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
+
+
+DEFAULT_URL = "http://homeassistant.local:8123"
+CONFIG_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "omarchy/home-assistant-ac.json"
+)
+
+
+class HomeAssistantError(RuntimeError):
+    pass
+
+
+class MultipleClimateEntitiesError(HomeAssistantError):
+    def __init__(self, entity_ids: list[str]) -> None:
+        self.entity_ids = entity_ids
+        super().__init__("Multiple air conditioners found; choose one from the device list")
+
+
+def emit(payload: dict[str, Any]) -> int:
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0 if payload.get("ok") else 1
+
+
+def fail(message: str, **extra: Any) -> int:
+    payload: dict[str, Any] = {"ok": False, "error": message}
+    payload.update(extra)
+    return emit(payload)
+
+
+def load_config() -> dict[str, Any]:
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HomeAssistantError(f"Cannot read {CONFIG_PATH}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise HomeAssistantError(f"{CONFIG_PATH} must contain a JSON object")
+    return value
+
+
+def config_values(config: dict[str, Any]) -> tuple[str, str, str]:
+    url = normalize_url(config.get("url") or os.environ.get("HOME_ASSISTANT_URL") or DEFAULT_URL)
+    token = str(config.get("token") or os.environ.get("HOME_ASSISTANT_TOKEN") or "").strip()
+    entity_id = str(config.get("entity_id") or "").strip()
+    return url, token, entity_id
+
+
+def normalize_url(value: Any) -> str:
+    """Return a safe Home Assistant base URL from a friendly user input."""
+    text = str(value or "").strip()
+    if not text:
+        raise HomeAssistantError("Enter the address of your Home Assistant server")
+    if any(char.isspace() for char in text):
+        raise HomeAssistantError("The Home Assistant address cannot contain spaces")
+    if "://" not in text:
+        text = f"http://{text}"
+    try:
+        parsed = urlsplit(text)
+        port = parsed.port
+    except ValueError as exc:
+        raise HomeAssistantError("Enter a valid Home Assistant address and port") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise HomeAssistantError("Use an address such as http://homeassistant.local:8123")
+    if parsed.username or parsed.password:
+        raise HomeAssistantError("Do not include a username or password in the server address")
+    if port is not None and not 1 <= port <= 65535:
+        raise HomeAssistantError("The Home Assistant port must be between 1 and 65535")
+    if parsed.query or parsed.fragment:
+        raise HomeAssistantError("The Home Assistant address must not contain a query or fragment")
+    path = parsed.path.rstrip("/")
+    if path.lower().endswith("/api"):
+        path = path[:-4].rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, path, "", "")).rstrip("/")
+
+
+def api_request(url: str, token: str, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
+    request = Request(url + path, data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=6) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise HomeAssistantError("Home Assistant rejected the access token (401)") from exc
+        if exc.code == 404:
+            raise HomeAssistantError("Home Assistant endpoint or entity was not found (404)") from exc
+        raise HomeAssistantError(f"Home Assistant returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise HomeAssistantError(f"Cannot reach Home Assistant at {url}: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise HomeAssistantError(f"Home Assistant request timed out at {url}") from exc
+    except OSError as exc:
+        raise HomeAssistantError(f"Cannot reach Home Assistant at {url}") from exc
+    if not raw:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HomeAssistantError("Home Assistant returned invalid JSON") from exc
+
+
+def number(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result == result else None
+
+
+def temperature_unit(value: Any) -> str:
+    text = str(value or "°C").strip()
+    if text in {"C", "c"}:
+        return "°C"
+    if text in {"F", "f"}:
+        return "°F"
+    return text if text.startswith("°") else f"°{text}"
+
+
+def resolve_state(url: str, token: str, configured_entity: str) -> tuple[dict[str, Any], list[str]]:
+    if configured_entity:
+        state = api_request(url, token, "GET", f"/api/states/{quote(configured_entity, safe='')}")
+        if not isinstance(state, dict):
+            raise HomeAssistantError("Home Assistant returned no state for the configured entity")
+        return state, [configured_entity]
+
+    states = api_request(url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        raise HomeAssistantError("Home Assistant returned an invalid state list")
+    candidates = []
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        entity_id = str(state.get("entity_id") or "")
+        if not entity_id.startswith("climate."):
+            continue
+        if str(state.get("state") or "").lower() in {"unknown", "unavailable"}:
+            continue
+        candidates.append(state)
+    if not candidates:
+        raise HomeAssistantError("No available climate entity was found on Home Assistant")
+    if len(candidates) > 1:
+        raise MultipleClimateEntitiesError([str(item.get("entity_id")) for item in candidates])
+    return candidates[0], [str(candidates[0].get("entity_id"))]
+
+
+def list_entities(url: str, token: str) -> list[dict[str, Any]]:
+    states = api_request(url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        raise HomeAssistantError("Home Assistant returned an invalid state list")
+    entities = []
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        entity_id = str(state.get("entity_id") or "")
+        if not entity_id.startswith("climate."):
+            continue
+        if str(state.get("state") or "").lower() in {"unknown", "unavailable"}:
+            continue
+        attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
+        entities.append({
+            "id": entity_id,
+            "name": str(attrs.get("friendly_name") or entity_id),
+            "state": str(state.get("state") or "unknown"),
+        })
+    entities.sort(key=lambda item: (item["name"].lower(), item["id"]))
+    return entities
+
+
+def config_snapshot(url: str, token: str, entity_id: str) -> int:
+    return emit({
+        "ok": True,
+        "configured": bool(token),
+        "url": url,
+        "entity_id": entity_id,
+    })
+
+
+def read_setup_payload() -> dict[str, Any]:
+    """Read setup credentials from stdin so the token never appears in argv."""
+    raw = sys.stdin.readline().strip()
+    if not raw:
+        raise HomeAssistantError("No Home Assistant setup details were received")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HomeAssistantError("Home Assistant setup details were not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HomeAssistantError("Home Assistant setup details must be a JSON object")
+    return payload
+
+
+def save_config(config: dict[str, Any]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".home-assistant-ac.", dir=CONFIG_PATH.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, CONFIG_PATH)
+        os.chmod(CONFIG_PATH, 0o600)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
+    """Validate credentials, select an entity, and persist a working setup."""
+    try:
+        url = normalize_url(payload.get("url") or current_config.get("url") or DEFAULT_URL)
+    except HomeAssistantError as exc:
+        return fail(str(exc), configured=False)
+    token = str(payload.get("token") or "").strip()
+    if not token:
+        return fail("Paste a Home Assistant long-lived access token to continue", configured=False, url=url)
+
+    try:
+        # /api/ is cheap and gives a clear authentication error before we ask
+        # for the full state list.
+        api_request(url, token, "GET", "/api/")
+        entities = list_entities(url, token)
+    except HomeAssistantError as exc:
+        return fail(str(exc), configured=False, url=url)
+
+    if not entities:
+        return fail(
+            "Home Assistant is reachable, but no available climate entity was found. "
+            "Finish the Daikin integration first, then try again.",
+            configured=False,
+            url=url,
+        )
+
+    requested_entity = str(payload.get("entity_id") or "").strip()
+    if requested_entity:
+        matching = next((item for item in entities if item["id"] == requested_entity), None)
+        if matching is None:
+            return fail(
+                "Choose an available air conditioner from the device list.",
+                configured=False,
+                url=url,
+                entities=entities,
+                needs_entity=True,
+            )
+        entity_id = requested_entity
+    elif len(entities) == 1:
+        entity_id = entities[0]["id"]
+    else:
+        return emit({
+            "ok": True,
+            "configured": False,
+            "url": url,
+            "entities": entities,
+            "needs_entity": True,
+        })
+
+    config = {
+        "url": url,
+        "token": token,
+        "entity_id": entity_id,
+    }
+    if current_config.get("poll_seconds") is not None:
+        config["poll_seconds"] = current_config["poll_seconds"]
+    try:
+        save_config(config)
+    except OSError as exc:
+        return fail(f"Cannot save the Home Assistant configuration: {exc}", configured=False, url=url)
+
+    selected = next(item for item in entities if item["id"] == entity_id)
+    return emit({
+        "ok": True,
+        "configured": True,
+        "url": url,
+        "entity_id": entity_id,
+        "name": selected["name"],
+        "entities": entities,
+    })
+
+
+def climate_device_info(attrs: dict[str, Any]) -> str:
+    nested = attrs.get("device_info") if isinstance(attrs.get("device_info"), dict) else {}
+
+    def first_text(*values: Any) -> str:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    manufacturer = first_text(
+        attrs.get("manufacturer"), attrs.get("brand"), attrs.get("make"),
+        nested.get("manufacturer"), nested.get("brand"), nested.get("make"),
+    ) or "Daikin"
+    model = first_text(
+        attrs.get("model"), attrs.get("model_name"), attrs.get("model_id"), attrs.get("device_model"),
+        nested.get("model"), nested.get("model_name"), nested.get("model_id"),
+    )
+    if not model or model.casefold() == manufacturer.casefold():
+        return manufacturer
+    if manufacturer.casefold() in model.casefold():
+        return model
+    return f"{manufacturer} ({model})"
+
+
+def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any]:
+    attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
+    entity_id = str(state.get("entity_id") or entity_ids[0])
+    modes = attrs.get("hvac_modes") if isinstance(attrs.get("hvac_modes"), list) else []
+    return {
+        "ok": True,
+        "entity_id": entity_id,
+        "name": str(attrs.get("friendly_name") or entity_id),
+        "device_info": climate_device_info(attrs),
+        "state": str(state.get("state") or "unknown"),
+        "ambient": number(attrs.get("current_temperature")),
+        "target": number(attrs.get("temperature", attrs.get("target_temperature"))),
+        "unit": temperature_unit(attrs.get("temperature_unit")),
+        "step": number(attrs.get("target_temp_step")) or 1.0,
+        "min_temp": number(attrs.get("min_temp")),
+        "max_temp": number(attrs.get("max_temp")),
+        "hvac_modes": [str(mode) for mode in modes],
+        "last_updated": state.get("last_updated"),
+    }
+
+
+def status(url: str, token: str, configured_entity: str) -> int:
+    state, entity_ids = resolve_state(url, token, configured_entity)
+    return emit(state_payload(state, entity_ids))
+
+
+def call_service(url: str, token: str, service: str, data: dict[str, Any]) -> None:
+    api_request(url, token, "POST", f"/api/services/climate/{service}", data)
+
+
+def set_temperature(url: str, token: str, configured_entity: str, raw_value: str) -> int:
+    try:
+        requested = float(raw_value)
+    except ValueError:
+        return fail("Target temperature must be a number")
+    state, entity_ids = resolve_state(url, token, configured_entity)
+    payload = state_payload(state, entity_ids)
+    minimum = payload.get("min_temp")
+    maximum = payload.get("max_temp")
+    if minimum is not None and requested < minimum:
+        return fail(f"Target temperature is below the device minimum ({minimum:g}{payload['unit']})")
+    if maximum is not None and requested > maximum:
+        return fail(f"Target temperature is above the device maximum ({maximum:g}{payload['unit']})")
+    requested = round(requested, 2)
+    call_service(url, token, "set_temperature", {"entity_id": payload["entity_id"], "temperature": requested})
+    return emit({
+        "ok": True,
+        "entity_id": payload["entity_id"],
+        "requested_target": requested,
+    })
+
+
+def set_entity(config: dict[str, Any], entity_id: str) -> int:
+    entity_id = entity_id.strip()
+    if not entity_id.startswith("climate.") or any(char.isspace() for char in entity_id):
+        return fail("Entity ID must look like climate.room_name")
+    config["entity_id"] = entity_id
+    try:
+        save_config(config)
+    except OSError as exc:
+        return fail(f"Cannot save the AC configuration: {exc}")
+    return emit({"ok": True, "entity_id": entity_id})
+
+
+def set_power(url: str, token: str, configured_entity: str, requested_power: str) -> int:
+    requested_power = requested_power.strip().lower()
+    if requested_power not in {"on", "off"}:
+        return fail("Power state must be on or off")
+    state, entity_ids = resolve_state(url, token, configured_entity)
+    payload = state_payload(state, entity_ids)
+    modes = [mode.lower() for mode in payload["hvac_modes"]]
+    if requested_power == "on":
+        preferred = next((mode for mode in ("cool", "auto", "heat", "dry", "fan_only") if mode in modes), None)
+        if preferred is None:
+            preferred = next((mode for mode in modes if mode != "off"), None)
+        if preferred is None:
+            return fail("The climate entity has no mode available for powering on")
+        target_mode = preferred
+    else:
+        target_mode = "off"
+    call_service(url, token, "set_hvac_mode", {"entity_id": payload["entity_id"], "hvac_mode": target_mode})
+    return emit({
+        "ok": True,
+        "entity_id": payload["entity_id"],
+        "requested_mode": target_mode,
+    })
+
+
+def main(argv: list[str]) -> int:
+    try:
+        config = load_config()
+        url, token, entity_id = config_values(config)
+    except HomeAssistantError as exc:
+        return fail(str(exc))
+
+    action = argv[1] if len(argv) > 1 else "status"
+    if action == "config" and len(argv) == 2:
+        return config_snapshot(url, token, entity_id)
+    if action == "configure" and len(argv) == 2:
+        try:
+            return configure(read_setup_payload(), config)
+        except HomeAssistantError as exc:
+            return fail(str(exc), configured=False, url=url)
+
+    if not token:
+        return fail(
+            f"Add a Home Assistant long-lived access token to {CONFIG_PATH}",
+            configured=False,
+            url=url,
+        )
+
+    metadata = {"configured": True, "url": url, "entity_id": entity_id}
+    try:
+        if action == "entities" and len(argv) == 2:
+            return emit({"ok": True, "entities": list_entities(url, token)})
+        if action == "status":
+            return status(url, token, entity_id)
+        if action == "set-entity" and len(argv) == 3:
+            return set_entity(config, argv[2])
+        if action == "set-temperature" and len(argv) == 3:
+            return set_temperature(url, token, entity_id, argv[2])
+        if action == "set-power" and len(argv) == 3:
+            return set_power(url, token, entity_id, argv[2])
+        return fail(
+            "Usage: config | configure | entities | status | set-entity <entity_id> "
+            "| set-temperature <value> | set-power <on|off>"
+        )
+    except MultipleClimateEntitiesError as exc:
+        return fail(str(exc), entity_ids=exc.entity_ids, **metadata)
+    except HomeAssistantError as exc:
+        return fail(str(exc), **metadata)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

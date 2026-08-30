@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "sai.homeassistant-ac",
+  "name": "Daikin Air",
+  "version": "2.0.0",
+  "author": "Sai Shreeyams",
+  "license": "MIT",
+  "description": "A polished Omarchy bar control for Daikin air conditioners exposed by Home Assistant.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Daikin Air",
+    "description": "See ambient and target temperature, switch power, and adjust one Home Assistant climate entity.",
+    "category": "Home",
+    "aliases": [
+      "daikin",
+      "air conditioning",
+      "aircon",
+      "home assistant",
+      "climate"
+    ],
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": {
+      "poll_seconds": 30
+    },
+    "schema": [
+      {
+        "key": "poll_seconds",
+        "type": "integer",
+        "label": "Polling interval (seconds)",
+        "description": "How often to refresh the Home Assistant state.",
+        "min": 15,
+        "max": 600,
+        "step": 15,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
