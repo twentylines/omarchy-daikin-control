@@ -16,7 +16,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string githubUrl: "https://github.com/twentylines/omarchy-ha-daikin"
+  readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string homeAssistantLinuxGuideUrl: "https://www.home-assistant.io/installation/linux/"
   readonly property string localServerUrl: "http://127.0.0.1:8123"
   readonly property string pluginDir: {
