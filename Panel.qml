@@ -5427,25 +5427,6 @@ Panel {
               onClicked: root.settingsSection = "preferences"
             }
 
-            Text {
-              width: parent.width
-              text: "EXTRA CUSTOMISATIONS"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 0.8
-            }
-
-            Text {
-              width: parent.width
-              text: "Adjust the plugin's accent and visual finish. Omarchy remains the default."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-
             Toggle {
               width: parent.width
               label: "Extra customisations"
