@@ -41,6 +41,8 @@ Panel {
   property bool multiUnitEnabledPrevious: false
   property bool globalSyncControls: true
   property bool globalSyncControlsPrevious: true
+  property bool syncNonPowerControls: true
+  property bool syncNonPowerControlsPrevious: true
   property string barTemperatureMode: "average"
   property string barTemperatureModePrevious: "average"
   property string barTemperatureEntity: ""
@@ -84,6 +86,7 @@ Panel {
   property var reading: ({})
   property var entityOptions: []
   property var unitLocalStates: ({})
+  property int unitLocalStateRevision: 0
   property string selectedEntity: ""
   property string pendingEntity: ""
   property string errorText: ""
@@ -93,9 +96,12 @@ Panel {
   property var localTarget: null
   property string pendingPowerState: ""
   property double powerRequestStartedAt: 0
+  property string powerReadbackMarker: ""
   property bool powerFinalCheckPending: false
   property bool powerCanCancel: false
   property string queuedPowerRequest: ""
+  property string queuedUnitPowerEntityId: ""
+  property string queuedUnitPowerRequest: ""
   property string queuedControlKind: ""
   property string queuedControlValue: ""
   property var temperatureInFlight: null
@@ -161,6 +167,7 @@ Panel {
   property bool remoteHistorySourceBusy: false
   property string remoteHistorySourcePayload: ""
   property bool remoteHistoryInstallSucceeded: false
+  property bool remoteHistoryReconfiguring: false
   property string remoteHistoryMessage: ""
   property string remoteHistoryError: ""
   property string remoteHistoryPayload: ""
@@ -226,7 +233,13 @@ Panel {
   readonly property bool connected: reading && reading.ok === true
   readonly property bool multiUnitActive: multiUnitEnabled && selectedEntities.length > 1
     && unitReadings.length > 1
-  readonly property bool showMainRemote: !multiUnitActive || globalSyncControls
+  readonly property bool splitPowerOnly: multiUnitActive && !globalSyncControls
+    && syncNonPowerControls
+  readonly property bool separateRemotesActive: multiUnitActive && !globalSyncControls
+    && !syncNonPowerControls
+  readonly property bool showMainRemote: !multiUnitActive || globalSyncControls || syncNonPowerControls
+  readonly property bool remoteHistoryPaired: historySource === "server"
+    && String(remoteHistoryTarget || "").trim() !== ""
   readonly property bool barIsOn: connected && multiUnitActive
     ? anyUnitOn() : isOn
   readonly property bool actualIsOn: connected && String(reading.state || "").toLowerCase() !== "off"
@@ -376,10 +389,14 @@ Panel {
     if (hasValues) next[id] = current
     else delete next[id]
     unitLocalStates = next
+    unitLocalStateRevision += 1
   }
 
   function clearUnitLocalStates() {
     unitLocalStates = ({})
+    unitLocalStateRevision += 1
+    queuedUnitPowerEntityId = ""
+    queuedUnitPowerRequest = ""
   }
 
   function hasPendingUnitPower() {
@@ -411,8 +428,10 @@ Panel {
         changed = true
       }
     }
-    if (changed) unitLocalStates = next
-    return changed
+    if (!changed || !root.refreshStatus()) return false
+    unitLocalStates = next
+    unitLocalStateRevision += 1
+    return true
   }
 
   function failUnitPowerFinalChecks() {
@@ -423,7 +442,9 @@ Panel {
       if (!state || state.powerFinalCheckPending !== true) continue
       delete state.power
       delete state.powerStartedAt
+      delete state.powerReadbackMarker
       delete state.powerFinalCheckPending
+      delete state.powerCanCancel
       changed = true
       var hasValues = false
       for (var key in state) {
@@ -432,7 +453,10 @@ Panel {
       }
       if (!hasValues) delete next[id]
     }
-    if (changed) unitLocalStates = next
+    if (changed) {
+      unitLocalStates = next
+      unitLocalStateRevision += 1
+    }
     return changed
   }
 
@@ -449,14 +473,21 @@ Panel {
         if (state.power) {
           var observedOn = String(climate.state || "").toLowerCase() !== "off"
           var requestedOn = state.power === "turning_on"
-          if (observedOn === requestedOn) {
+          var readbackMarker = root.powerMarker(climate)
+          var readbackIsFresh = String(state.powerReadbackMarker || "") !== ""
+            && readbackMarker !== "" && readbackMarker !== String(state.powerReadbackMarker)
+          if (observedOn === requestedOn && readbackIsFresh) {
             delete state.power
             delete state.powerStartedAt
+            delete state.powerReadbackMarker
             delete state.powerFinalCheckPending
+            delete state.powerCanCancel
           } else if (state.powerFinalCheckPending === true) {
             delete state.power
             delete state.powerStartedAt
+            delete state.powerReadbackMarker
             delete state.powerFinalCheckPending
+            delete state.powerCanCancel
             if (message === "") {
               message = "Home Assistant still reports " + root.entityDisplayName(id)
                 + " as " + (observedOn ? "on" : "off") + "."
@@ -476,6 +507,7 @@ Panel {
       if (hasValues) next[id] = state
     }
     unitLocalStates = next
+    unitLocalStateRevision += 1
     return message
   }
 
@@ -488,7 +520,9 @@ Panel {
     else if (actionKind === "unit-power") {
       root.setUnitLocalStateValue(id, "power", null)
       root.setUnitLocalStateValue(id, "powerStartedAt", null)
+      root.setUnitLocalStateValue(id, "powerReadbackMarker", null)
       root.setUnitLocalStateValue(id, "powerFinalCheckPending", null)
+      root.setUnitLocalStateValue(id, "powerCanCancel", null)
     }
   }
 
@@ -613,6 +647,12 @@ Panel {
     return a !== "" && a === b
   }
 
+  function powerMarker(climate) {
+    if (!climate) return ""
+    var changed = String(climate.last_changed || "")
+    return changed !== "" ? changed : String(climate.last_updated || "")
+  }
+
   function formatControlOptions(items, excludeOff) {
     var next = []
     if (!Array.isArray(items)) return next
@@ -631,6 +671,7 @@ Panel {
   function clearLocalPower() {
     pendingPowerState = ""
     powerRequestStartedAt = 0
+    powerReadbackMarker = ""
     powerFinalCheckPending = false
     powerCanCancel = false
   }
@@ -739,6 +780,8 @@ Panel {
     multiUnitEnabledPrevious = multiUnitEnabled
     globalSyncControls = parsed.global_sync_controls !== false
     globalSyncControlsPrevious = globalSyncControls
+    syncNonPowerControls = parsed.sync_non_power_controls !== false
+    syncNonPowerControlsPrevious = syncNonPowerControls
     selectedEntities = normalizeSelectedEntities(parsed.selected_entities, selectedEntity)
     var parsedBarMode = String(parsed.bar_temperature_mode || "average")
     barTemperatureMode = ["average", "all", "single", "selected"].indexOf(parsedBarMode) >= 0
@@ -1016,6 +1059,7 @@ Panel {
         remoteHistoryError = ""
         remoteHistoryMessage = String(parsed.message || "Server history logger installed.")
         remoteHistoryInstallSucceeded = true
+        remoteHistoryReconfiguring = false
         return
       }
       remoteHistoryInstallSucceeded = false
@@ -1378,6 +1422,8 @@ Panel {
         multiUnitEnabledPrevious = false
         globalSyncControls = true
         globalSyncControlsPrevious = true
+        syncNonPowerControls = true
+        syncNonPowerControlsPrevious = true
         selectedEntities = []
         barTemperatureMode = "average"
         barTemperatureModePrevious = "average"
@@ -1584,7 +1630,8 @@ Panel {
         return
       }
       if (source === "action" && actionKind.indexOf("unit-") === 0) {
-        root.rejectUnitLocalAction()
+        if (actionKind !== "unit-power" || queuedUnitPowerEntityId === "")
+          root.rejectUnitLocalAction()
         errorText = ""
         return
       }
@@ -1661,7 +1708,10 @@ Panel {
             && parsed.state !== undefined) {
           var observedOn = String(parsed.state || "").toLowerCase() !== "off"
           var requestedOn = localPower
-          if (observedOn === requestedOn) {
+          var readbackMarker = root.powerMarker(parsed)
+          var readbackIsFresh = powerReadbackMarker !== ""
+            && readbackMarker !== "" && readbackMarker !== powerReadbackMarker
+          if (observedOn === requestedOn && readbackIsFresh) {
             root.clearLocalPower()
             errorText = ""
             return
@@ -1696,6 +1746,11 @@ Panel {
           errorText = ""
           return
         }
+        if (source === "action" && actionKind === "unit-power"
+            && queuedUnitPowerEntityId !== "") {
+          errorText = ""
+          return
+        }
         if (source === "status" && powerFinalCheckPending) {
           var finalStatusError = parsed && parsed.error ? String(parsed.error)
             : "Home Assistant status could not be refreshed"
@@ -1723,6 +1778,11 @@ Panel {
       }
     } catch (e) {
       if (source === "action" && hasLocalPower) {
+        errorText = ""
+        return
+      }
+      if (source === "action" && actionKind === "unit-power"
+          && queuedUnitPowerEntityId !== "") {
         errorText = ""
         return
       }
@@ -1907,22 +1967,43 @@ Panel {
     actionProcess.running = true
   }
 
-  function requestUnitPower(entityId, requestedPower) {
-    if (actionProcess.running || masterSwitchBusy) return
-    var climate = unitReading(entityId)
+  function requestUnitPower(entityId, requestedPower, cancellable) {
+    if (masterSwitchBusy) return
+    var id = String(entityId || "")
+    var climate = unitReading(id)
     if (!climate) return
     var requested = String(requestedPower || "").toLowerCase()
     if (["on", "off"].indexOf(requested) < 0) return
-    root.setUnitLocalStateValue(entityId, "power", requested === "on" ? "turning_on" : "turning_off")
-    root.setUnitLocalStateValue(entityId, "powerStartedAt", Date.now())
-    root.setUnitLocalStateValue(entityId, "powerFinalCheckPending", false)
-    actionEntityId = String(entityId)
+    root.setUnitLocalStateValue(id, "power",
+      requested === "on" ? "turning_on" : "turning_off")
+    root.setUnitLocalStateValue(id, "powerStartedAt", Date.now())
+    root.setUnitLocalStateValue(id, "powerReadbackMarker", root.powerMarker(climate))
+    root.setUnitLocalStateValue(id, "powerFinalCheckPending", false)
+    root.setUnitLocalStateValue(id, "powerCanCancel", cancellable !== false)
+    errorText = ""
+    if (actionProcess.running) {
+      queuedUnitPowerEntityId = id
+      queuedUnitPowerRequest = requested
+      return
+    }
+    root.dispatchUnitPowerRequest(id, requested)
+  }
+
+  function dispatchUnitPowerRequest(entityId, requestedPower) {
+    actionEntityId = String(entityId || "")
     actionKind = "unit-power"
     actionBusy = true
     actionProcess.command = [
-      "python3", root.helperPath, "set-power", requested, String(entityId)
+      "python3", root.helperPath, "set-power", String(requestedPower), actionEntityId
     ]
     actionProcess.running = true
+  }
+
+  function cancelUnitPower(entityId) {
+    var id = String(entityId || "")
+    var state = root.unitLocalState(id)
+    if (masterSwitchBusy || !state.power || state.powerCanCancel !== true) return
+    root.requestUnitPower(id, state.power === "turning_on" ? "off" : "on", false)
   }
 
   function setAdvancedControlsEnabled(value) {
@@ -2014,6 +2095,15 @@ Panel {
     globalSyncControlsPrevious = globalSyncControls
     globalSyncControls = next
     root.beginPreference("global_sync_controls", next ? "on" : "off")
+  }
+
+  function setSyncNonPowerControls(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === syncNonPowerControls) return
+    syncNonPowerControlsPrevious = syncNonPowerControls
+    syncNonPowerControls = next
+    root.beginPreference("sync_non_power_controls", next ? "on" : "off")
   }
 
   function setBarTemperatureMode(value) {
@@ -2171,6 +2261,7 @@ Panel {
       customHistoryHoursText = formatHours(historyHours)
     } else if (kind === "multi_unit_enabled") multiUnitEnabled = multiUnitEnabledPrevious
     else if (kind === "global_sync_controls") globalSyncControls = globalSyncControlsPrevious
+    else if (kind === "sync_non_power_controls") syncNonPowerControls = syncNonPowerControlsPrevious
     else if (kind === "bar_temperature_mode") barTemperatureMode = barTemperatureModePrevious
     else if (kind === "bar_temperature_entity") barTemperatureEntity = barTemperatureEntityPrevious
     else if (kind === "bar_temperature_entities") barTemperatureEntities = barTemperatureEntitiesPrevious.slice()
@@ -2199,6 +2290,9 @@ Panel {
     } else if (name === "global_sync_controls") {
       globalSyncControls = value === true
       globalSyncControlsPrevious = globalSyncControls
+    } else if (name === "sync_non_power_controls") {
+      syncNonPowerControls = value === true
+      syncNonPowerControlsPrevious = syncNonPowerControls
     } else if (name === "bar_temperature_mode") {
       barTemperatureMode = String(value || "average")
       barTemperatureModePrevious = barTemperatureMode
@@ -2335,6 +2429,7 @@ Panel {
   function requestPower(requestedPower, cancellable) {
     pendingPowerState = requestedPower === "on" ? "turning_on" : "turning_off"
     powerRequestStartedAt = Date.now()
+    powerReadbackMarker = root.powerMarker(reading)
     powerFinalCheckPending = false
     powerCanCancel = cancellable
     errorText = ""
@@ -2602,6 +2697,8 @@ Panel {
     onExited: {
       var completedKind = actionKind
       var queuedPower = queuedPowerRequest
+      var queuedUnitPowerEntity = queuedUnitPowerEntityId
+      var queuedUnitPower = queuedUnitPowerRequest
       var queuedControl = queuedControlKind
       var queuedValue = queuedControlValue
       if (completedKind === "temperature") {
@@ -2615,7 +2712,13 @@ Panel {
       actionBusy = false
       actionKind = ""
       actionEntityId = ""
-      if (queuedPower !== "") {
+      if (queuedUnitPowerEntity !== "") {
+        queuedUnitPowerEntityId = ""
+        queuedUnitPowerRequest = ""
+        Qt.callLater(function() {
+          root.dispatchUnitPowerRequest(queuedUnitPowerEntity, queuedUnitPower)
+        })
+      } else if (queuedPower !== "") {
         queuedPowerRequest = ""
         Qt.callLater(function() { root.dispatchPowerRequest(queuedPower) })
       } else if (queuedControl !== "") {
@@ -2660,7 +2763,7 @@ Panel {
     running: root.hasPendingUnitPower()
     onTriggered: {
       if (!root.hasPendingUnitPower() || actionProcess.running || statusProcess.running) return
-      if (root.markUnitPowerFinalChecks()) root.refreshStatus()
+      root.markUnitPowerFinalChecks()
     }
   }
 
@@ -2749,7 +2852,7 @@ Panel {
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(root.setupOpen
       ? (root.configured ? Style.space(600) : Style.space(520))
-      : (root.multiUnitActive && !root.globalSyncControls ? Style.space(620) : Style.space(360)))
+      : (root.separateRemotesActive ? Style.space(620) : Style.space(360)))
     contentHeight: panel.fittedContentHeight(root.setupOpen
       ? onboardingColumn.implicitHeight : column.implicitHeight)
 
@@ -3713,10 +3816,118 @@ Panel {
               BorderSurface {
                 id: remoteHistoryCard
                 width: parent.width
-                implicitHeight: remoteHistoryForm.implicitHeight + Style.space(24)
+                implicitHeight: (root.remoteHistoryPaired && !root.remoteHistoryReconfiguring
+                  ? remoteHistoryPairedSummary.implicitHeight : remoteHistoryForm.implicitHeight)
+                  + Style.space(24)
                 radius: root.compactRadius
                 color: root.alpha(root.accentColor, 0.045)
                 borderSpec: Border.flat(root.alpha(root.accentColor, 0.24), 1)
+
+                Behavior on implicitHeight {
+                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                }
+
+                Column {
+                  id: remoteHistoryPairedSummary
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: Style.space(12)
+                  spacing: Style.space(7)
+                  visible: root.remoteHistoryPaired && !root.remoteHistoryReconfiguring
+                  height: visible ? implicitHeight : 0
+                  opacity: visible ? 1 : 0
+                  clip: true
+
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(8)
+
+                    Text {
+                      width: Style.space(28)
+                      height: Style.space(28)
+                      text: "󰒓"
+                      color: root.accentColor
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.display
+                      horizontalAlignment: Text.AlignHCenter
+                      verticalAlignment: Text.AlignVCenter
+                    }
+
+                    Column {
+                      width: parent.width - Style.space(36)
+                      spacing: Style.space(1)
+
+                      Text {
+                        width: parent.width
+                        text: "EXTERNAL SERVER HISTORY"
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        font.letterSpacing: 0.8
+                      }
+
+                      Text {
+                        width: parent.width
+                        text: "PAIRED · CONNECTED"
+                        color: root.accentColor
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+                  }
+
+                  BorderSurface {
+                    width: parent.width
+                    implicitHeight: remoteHistoryPairedTarget.implicitHeight + Style.space(16)
+                    color: root.alpha(root.accentColor, 0.07)
+                    borderSpec: Border.flat(root.alpha(root.accentColor, 0.24), 1)
+                    radius: root.compactRadius
+
+                    Text {
+                      id: remoteHistoryPairedTarget
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      anchors.leftMargin: Style.space(10)
+                      anchors.rightMargin: Style.space(10)
+                      text: root.remoteHistoryTarget + ":" + root.remoteHistoryPortText
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      elide: Text.ElideRight
+                    }
+                  }
+
+                  Button {
+                    width: parent.width
+                    height: Style.space(36)
+                    text: "RECONFIGURE"
+                    fontSize: Style.font.caption
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    accent: root.accentColor
+                    background: root.alpha(root.foreground, 0.025)
+                    bordered: true
+                    radius: root.compactRadius
+                    enabled: !root.remoteHistoryBusy && !root.preferenceBusy
+                    tooltipText: "Edit the external server connection"
+                    onClicked: {
+                      root.remoteHistoryReconfiguring = true
+                      root.remoteHistoryMessage = ""
+                      root.remoteHistoryError = ""
+                    }
+                  }
+                }
 
                 Column {
                   id: remoteHistoryForm
@@ -3725,6 +3936,17 @@ Panel {
                   anchors.top: parent.top
                   anchors.margins: Style.space(12)
                   spacing: Style.space(7)
+                  visible: !root.remoteHistoryPaired || root.remoteHistoryReconfiguring
+                  height: visible ? implicitHeight : 0
+                  opacity: visible ? 1 : 0
+                  clip: true
+
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
 
                   Row {
                     width: parent.width
@@ -4208,7 +4430,7 @@ Panel {
               Toggle {
                 width: parent.width
                 label: "Globally synced controls"
-                description: "Recommended · one change updates every selected air conditioner."
+                description: "Use one remote for every selected air conditioner, including power."
                 checked: root.globalSyncControls
                 enabled: !root.preferenceBusy && root.selectedEntities.length > 1
                 foreground: root.foreground
@@ -4217,12 +4439,43 @@ Panel {
                 onClicked: root.setGlobalSyncControls(!root.globalSyncControls)
               }
 
+              Column {
+                visible: (!root.globalSyncControls && root.selectedEntities.length > 1) || height > 0.5
+                width: parent.width
+                height: !root.globalSyncControls && root.selectedEntities.length > 1
+                  ? implicitHeight : 0
+                opacity: !root.globalSyncControls && root.selectedEntities.length > 1 ? 1 : 0
+                clip: true
+                spacing: Style.space(5)
+
+                Behavior on height {
+                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                }
+                Behavior on opacity {
+                  NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                }
+
+                Toggle {
+                  width: parent.width
+                  label: "Sync non-power controls"
+                  description: "Recommended · sync temperature, mode, and fan while each AC keeps its own power button."
+                  checked: root.syncNonPowerControls
+                  enabled: !root.preferenceBusy
+                  foreground: root.foreground
+                  accent: root.accentColor
+                  fontFamily: root.fontFamily
+                  onClicked: root.setSyncNonPowerControls(!root.syncNonPowerControls)
+                }
+              }
+
               Text {
                 width: parent.width
                 text: root.selectedEntities.length > 1
                   ? (root.globalSyncControls
                     ? "The main remote controls all selected ACs together."
-                    : "The main panel will show one compact remote per selected AC.")
+                    : root.syncNonPowerControls
+                      ? "Temperature, mode, and fan stay synced; each AC gets its own power button."
+                      : "The main panel will show one compact remote per selected AC.")
                   : "Add another air conditioner from the main panel to unlock sync choices."
                 color: root.dim
                 font.family: root.fontFamily
@@ -5670,7 +5923,7 @@ Panel {
 
         Column {
           id: separateControlsSection
-          visible: root.multiUnitActive && !root.globalSyncControls
+          visible: root.separateRemotesActive
           width: parent.width
           spacing: Style.space(7)
 
@@ -5706,7 +5959,11 @@ Panel {
                   Style.space(240),
                   (separateRemoteFlow.width - separateRemoteFlow.spacing) / 2)
                 climate: root.unitReading(String(modelData)) || ({})
-                localState: root.unitLocalStates[String(modelData)] || ({})
+                localState: {
+                  var revision = root.unitLocalStateRevision
+                  return root.unitLocalState(String(modelData))
+                }
+                powerCancelEnabled: root.connected && !root.masterSwitchBusy
                 accent: root.accentColor
                 foreground: root.foreground
                 dim: root.dim
@@ -5723,7 +5980,10 @@ Panel {
                   root.requestUnitFanMode(String(modelData), value)
                 }
                 onPowerRequested: function(value) {
-                  root.requestUnitPower(String(modelData), value)
+                  root.requestUnitPower(String(modelData), value, true)
+                }
+                onPowerCancelRequested: {
+                  root.cancelUnitPower(String(modelData))
                 }
               }
             }
@@ -5992,99 +6252,118 @@ Panel {
 
         Item {
           id: powerControl
+          readonly property int splitPowerRows: Math.max(1, Math.ceil(root.selectedEntities.length / 2))
           width: parent.width
           visible: root.showMainRemote || height > 0.5
-          height: root.showMainRemote ? Style.space(48) : 0
+          height: root.showMainRemote
+            ? (root.splitPowerOnly
+              ? splitPowerRows * Style.space(82)
+                + Math.max(0, splitPowerRows - 1) * Style.space(8)
+              : Style.space(48)) : 0
           opacity: root.showMainRemote ? 1 : 0
+          clip: true
 
           Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
           Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-          Button {
+          ClimatePowerControl {
+            id: mainPowerControl
             anchors.fill: parent
-            visible: opacity > 0
-            opacity: root.hasLocalPower || root.modeRestarting ? 0 : 1
-            iconText: "⏻"
-            iconSize: Style.font.display
-            text: root.isOn ? "TURN OFF" : "TURN ON"
-            fontSize: Style.font.bodySmall
-            enabled: root.connected && !root.actionBusy
-              && !root.masterSwitchBusy && !root.hasLocalPower && !root.modeRestarting
-            fontFamily: root.fontFamily
-            foreground: root.isOn ? root.accentColor : root.foreground
+            visible: !root.splitPowerOnly
+            connected: root.connected
+            isOn: root.isOn
+            powerPending: root.hasLocalPower
+            localPowerOn: root.localPower
+            modePending: root.modeRestarting
+            powerCanCancel: root.powerCanCancel
+            actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
+            cancelEnabled: root.connected && !root.masterSwitchBusy
+            foreground: root.foreground
             accent: root.accentColor
-            background: root.isOn ? root.alpha(root.accentColor, 0.13) : root.alpha(root.foreground, 0.035)
-            bordered: true
-            tooltipText: root.isOn ? "Turn off" : "Turn on"
-            onClicked: root.togglePower()
-
-            Behavior on opacity { NumberAnimation { duration: root.motionFast } }
+            fontFamily: root.fontFamily
+            panelRadius: root.compactRadius
+            onPowerRequested: root.togglePower()
+            onPowerCancelRequested: root.cancelPower()
           }
 
-          Row {
+          Flow {
+            id: splitPowerFlow
             anchors.fill: parent
-            visible: opacity > 0
-            opacity: root.hasLocalPower || root.modeRestarting ? 1 : 0
-            spacing: cancelPowerButton.width > 0 ? Style.space(8) : 0
+            spacing: Style.space(8)
+            visible: root.splitPowerOnly
+            opacity: root.splitPowerOnly ? 1 : 0
 
-            Behavior on opacity { NumberAnimation { duration: root.motionFast } }
+            Repeater {
+              model: root.selectedEntities
 
-            BorderSurface {
-              width: parent.width - cancelPowerButton.width - parent.spacing
-              height: parent.height
-              radius: root.compactRadius
-              color: root.alpha(root.accentColor, 0.12)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.42), 1)
-
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(8)
-
-                LoadingRing {
-                  width: Style.space(18)
-                  height: width
-                  anchors.verticalCenter: parent.verticalCenter
-                  color: root.accentColor
-                  strokeWidth: Style.space(2)
+              Item {
+                id: splitPowerCard
+                required property var modelData
+                readonly property string entityId: String(modelData)
+                readonly property var climate: root.unitReading(entityId) || ({})
+                readonly property var localState: {
+                  var revision = root.unitLocalStateRevision
+                  return root.unitLocalState(entityId)
                 }
+                readonly property bool powerPending: String(localState.power || "") !== ""
+                readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
+                readonly property bool actualIsOn: String(climate.state || "").toLowerCase() !== "off"
 
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.modeRestarting ? "RESTARTING AC…"
-                    : root.localPower ? "POWERING ON…" : "POWERING OFF…"
-                  color: root.accentColor
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
-                  font.letterSpacing: 0.6
+                width: Math.max(
+                  Style.space(160),
+                  (splitPowerFlow.width - splitPowerFlow.spacing) / 2)
+                height: Style.space(82)
+
+                BorderSurface {
+                  anchors.fill: parent
+                  radius: root.compactRadius
+                  color: root.alpha(root.accentColor,
+                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.075 : 0.035)
+                  borderSpec: Border.flat(root.alpha(root.accentColor,
+                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.30 : 0.14), 1)
+
+                  Column {
+                    anchors.fill: parent
+                    anchors.margins: Style.space(10)
+                    spacing: Style.space(5)
+
+                    Text {
+                      width: parent.width
+                      text: root.entityDisplayName(splitPowerCard.entityId)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+
+                    ClimatePowerControl {
+                      width: parent.width
+                      height: Style.space(36)
+                      connected: root.connected && splitPowerCard.climate.entity_id !== undefined
+                      isOn: splitPowerCard.powerPending
+                        ? splitPowerCard.localPowerOn : splitPowerCard.actualIsOn
+                      powerPending: splitPowerCard.powerPending
+                      localPowerOn: splitPowerCard.localPowerOn
+                      powerCanCancel: splitPowerCard.localState.powerCanCancel === true
+                      compact: true
+                      actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
+                      cancelEnabled: root.connected && !root.masterSwitchBusy
+                      foreground: root.foreground
+                      accent: root.accentColor
+                      fontFamily: root.fontFamily
+                      panelRadius: root.compactRadius
+                      onPowerRequested: function(value) {
+                        root.requestUnitPower(splitPowerCard.entityId, value, true)
+                      }
+                      onPowerCancelRequested: root.cancelUnitPower(splitPowerCard.entityId)
+                    }
+                  }
                 }
               }
-
-              Behavior on width { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
-            }
-
-            Button {
-              id: cancelPowerButton
-              width: root.powerCanCancel ? Style.space(86) : 0
-              height: parent.height
-              visible: width > 0
-              opacity: root.powerCanCancel ? 1 : 0
-              text: "CANCEL"
-              fontSize: Style.font.bodySmall
-              enabled: root.powerCanCancel
-              fontFamily: root.fontFamily
-              foreground: root.foreground
-              accent: root.accentColor
-              background: root.alpha(root.foreground, 0.035)
-              bordered: true
-              radius: root.compactRadius
-              tooltipText: "Reverse this power request"
-              onClicked: root.cancelPower()
-
-              Behavior on width { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
-              Behavior on opacity { NumberAnimation { duration: root.motionFast } }
             }
           }
+
         }
 
         Column {

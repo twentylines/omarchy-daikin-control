@@ -109,10 +109,12 @@ external logger on the Home Assistant host is recommended for long recordings.
 ### Experimental features
 
 The multi-aircon panel lets you add several available climate entities below
-the main selector. **Globally synced controls** is enabled by default, so one
-change is sent to every selected AC. Turning it off shows a compact remote for
-each selected unit. The bar ambient summary can show the average, all values,
-one unit, or a chosen subset.
+the main selector. **Globally synced controls** sends every change, including
+power, to every selected AC. When it is off, **Sync non-power controls** is
+enabled by default: temperature, mode, and fan changes stay synced while each
+AC gets its own latched power button. Turn that option off to show a compact
+remote for each selected unit. The bar ambient summary can show the average,
+all values, one unit, or a chosen subset.
 
 The appearance mode can follow Omarchy automatically or use a custom accent.
 Custom mode includes a color picker/hex value and typed values for

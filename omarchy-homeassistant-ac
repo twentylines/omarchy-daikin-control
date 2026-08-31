@@ -167,6 +167,9 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "multi_unit_enabled": preference_enabled(config.get("multi_unit_enabled")),
         "global_sync_controls": preference_enabled(config.get("global_sync_controls", True)),
+        "sync_non_power_controls": preference_enabled(
+            config.get("sync_non_power_controls", True)
+        ),
         "selected_entities": selected,
         "bar_temperature_mode": bar_temperature_mode(config.get("bar_temperature_mode")),
         "bar_temperature_entity": single_entity,
@@ -755,7 +758,10 @@ def control_entity_ids(
             raise HomeAssistantError("That air conditioner is not in the selected panel list")
         return [target]
     if preference_enabled(config.get("multi_unit_enabled")) \
-            and preference_enabled(config.get("global_sync_controls", True)):
+            and (
+                preference_enabled(config.get("global_sync_controls", True))
+                or preference_enabled(config.get("sync_non_power_controls", True))
+            ):
         return selected
     fallback = climate_entity_id(configured_entity)
     return [fallback] if fallback else selected[:1]
@@ -992,6 +998,7 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "history_remote_path": remote_history_path(current_config.get("history_remote_path")),
         "multi_unit_enabled": previous_experimental["multi_unit_enabled"],
         "global_sync_controls": previous_experimental["global_sync_controls"],
+        "sync_non_power_controls": previous_experimental["sync_non_power_controls"],
         "selected_entities": selected_ids,
         "bar_temperature_mode": previous_experimental["bar_temperature_mode"],
         "bar_temperature_entity": previous_experimental["bar_temperature_entity"],
@@ -1082,6 +1089,7 @@ def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any
         "history_source": "local",
         "history_server": "",
         "history_error": "",
+        "last_changed": state.get("last_changed"),
         "last_updated": state.get("last_updated"),
     }
 
@@ -1138,6 +1146,9 @@ def status(
     payload["multi_unit_enabled"] = preference_enabled((config or {}).get("multi_unit_enabled"))
     payload["global_sync_controls"] = preference_enabled(
         (config or {}).get("global_sync_controls", True)
+    )
+    payload["sync_non_power_controls"] = preference_enabled(
+        (config or {}).get("sync_non_power_controls", True)
     )
     return emit(payload)
 
@@ -1416,7 +1427,10 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             return fail("Temperature history source must be local or server")
         value = value_text.lower()
         config[name] = value
-    elif name in {"multi_unit_enabled", "global_sync_controls", "experimental_history_enabled", "custom_appearance_enabled"}:
+    elif name in {
+        "multi_unit_enabled", "global_sync_controls", "sync_non_power_controls",
+        "experimental_history_enabled", "custom_appearance_enabled",
+    }:
         if value_text.lower() not in {"on", "off"}:
             return fail(f"{name.replace('_', ' ').capitalize()} must be on or off")
         value = value_text.lower() == "on"

@@ -820,6 +820,27 @@ class HelperTests(unittest.TestCase):
         finally:
             helper.urlopen = original_urlopen
 
+    def test_non_power_sync_keeps_batch_controls_when_power_is_separate(self):
+        selected = ["climate.bedroom", "climate.living_room"]
+        config = {
+            "multi_unit_enabled": True,
+            "global_sync_controls": False,
+            "sync_non_power_controls": True,
+            "selected_entities": selected,
+            "entity_id": selected[0],
+        }
+        self.assertEqual(
+            helper.control_entity_ids(config, selected[0]), selected
+        )
+        self.assertEqual(
+            helper.control_entity_ids(config, selected[0], selected[1]), [selected[1]]
+        )
+
+        config["sync_non_power_controls"] = False
+        self.assertEqual(
+            helper.control_entity_ids(config, selected[0]), [selected[0]]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

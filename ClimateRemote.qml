@@ -15,10 +15,12 @@ Item {
   property color accent: Color.accent
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
+  property bool powerCancelEnabled: true
 
   readonly property bool connected: climate && String(climate.entity_id || "") !== ""
   readonly property bool powerPending: String(localState.power || "") !== ""
   readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
+  readonly property bool powerCanCancel: localState.powerCanCancel === true
   readonly property bool actualIsOn: connected && String(climate.state || "").toLowerCase() !== "off"
   readonly property bool isOn: connected && (powerPending ? localPowerOn : actualIsOn)
   readonly property bool hasLocalTarget: localState.target !== undefined
@@ -41,6 +43,7 @@ Item {
   signal modeRequested(string value)
   signal fanModeRequested(string value)
   signal powerRequested(string value)
+  signal powerCancelRequested()
 
   implicitHeight: remoteCard.implicitHeight
   height: implicitHeight
@@ -135,59 +138,24 @@ Item {
           }
         }
 
-        Item {
+        ClimatePowerControl {
           id: remotePowerArea
-          width: Style.space(54)
+          width: root.powerPending && root.powerCanCancel ? Style.space(134) : Style.space(54)
           height: Style.space(34)
-
-          Button {
-            id: remotePowerButton
-            anchors.fill: parent
-            visible: !root.powerPending
-            text: root.isOn ? "OFF" : "ON"
-            iconText: "⏻"
-            iconSize: Style.font.caption
-            fontSize: Style.font.caption
-            fontFamily: root.fontFamily
-            foreground: root.isOn ? root.accent : root.foreground
-            accent: root.accent
-            background: root.isOn ? root.alpha(root.accent, 0.12) : root.alpha(root.foreground, 0.035)
-            bordered: true
-            radius: root.panelRadius
-            enabled: root.enabled && root.connected && !root.powerPending
-            tooltipText: root.isOn ? "Turn off this air conditioner" : "Turn on this air conditioner"
-            onClicked: root.powerRequested(root.isOn ? "off" : "on")
-          }
-
-          BorderSurface {
-            anchors.fill: parent
-            visible: root.powerPending
-            color: root.alpha(root.accent, 0.12)
-            borderSpec: Border.flat(root.alpha(root.accent, 0.42), 1)
-            radius: root.panelRadius
-
-            Row {
-              anchors.centerIn: parent
-              spacing: Style.space(3)
-
-              LoadingRing {
-                width: Style.space(12)
-                height: width
-                anchors.verticalCenter: parent.verticalCenter
-                color: root.accent
-                strokeWidth: Style.space(2)
-              }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.localPowerOn ? "ON…" : "OFF…"
-                color: root.accent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-            }
-          }
+          connected: root.connected
+          isOn: root.isOn
+          powerPending: root.powerPending
+          localPowerOn: root.localPowerOn
+          powerCanCancel: root.powerCanCancel
+          compact: true
+          actionEnabled: root.enabled
+          cancelEnabled: root.powerCancelEnabled
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          panelRadius: root.panelRadius
+          onPowerRequested: function(value) { root.powerRequested(value) }
+          onPowerCancelRequested: root.powerCancelRequested()
         }
       }
 
