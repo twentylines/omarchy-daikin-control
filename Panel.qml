@@ -43,6 +43,12 @@ Panel {
   property bool globalSyncControlsPrevious: true
   property bool syncNonPowerControls: true
   property bool syncNonPowerControlsPrevious: true
+  property bool averageTemperatureDecimals: false
+  property bool averageTemperatureDecimalsPrevious: false
+  property string temperatureUnitPreference: "source"
+  property string temperatureUnitPreferencePrevious: "source"
+  property bool experimentalKelvinEnabled: false
+  property bool experimentalKelvinEnabledPrevious: false
   property string barTemperatureMode: "average"
   property string barTemperatureModePrevious: "average"
   property string barTemperatureEntity: ""
@@ -53,10 +59,20 @@ Panel {
   property bool experimentalHistoryEnabledPrevious: false
   property bool customAppearanceEnabled: false
   property bool customAppearanceEnabledPrevious: false
+  property bool appearanceAutoAccent: true
+  property bool appearanceAutoAccentPrevious: true
   property color customAccentColor: "#8FA79F"
   property color customAccentColorPrevious: "#8FA79F"
   property string customAccentHexText: "#8FA79F"
   property string customAccentHexTextPrevious: "#8FA79F"
+  property color customControlColor: "#8FA79F"
+  property color customControlColorPrevious: "#8FA79F"
+  property string customControlHexText: "#8FA79F"
+  property string customControlHexTextPrevious: "#8FA79F"
+  property bool appearanceDeviceColorsEnabled: false
+  property bool appearanceDeviceColorsEnabledPrevious: false
+  property var appearanceDeviceColors: ({})
+  property var appearanceDeviceColorsPrevious: ({})
   property real appearanceTransparency: 0
   property real appearanceTransparencyPrevious: 0
   property string appearanceTransparencyText: "0"
@@ -66,16 +82,26 @@ Panel {
   property real appearanceRadius: 16
   property real appearanceRadiusPrevious: 16
   property string appearanceRadiusText: "16"
-  readonly property color accentColor: customAppearanceEnabled ? customAccentColor : Color.accent
+  readonly property color accentColor: customAppearanceEnabled && !appearanceAutoAccent
+    ? customAccentColor : Color.accent
+  // The control colour drives switches, sliders, selected states, and hover
+  // feedback. It falls back to Omarchy whenever custom appearance is inactive.
+  readonly property color interactionAccentColor: customAppearanceEnabled && !appearanceAutoAccent
+    ? customControlColor : Color.accent
+  readonly property color controlAccentColor: interactionAccentColor
   readonly property real appearanceSurfaceOpacity: customAppearanceEnabled
-    ? Math.max(0.30, 1 - appearanceTransparency / 100) : 1
+    ? Math.max(0, 1 - appearanceTransparency / 100) : 1
   readonly property real appearanceSoftness: customAppearanceEnabled
     ? Math.max(0, Math.min(1, appearanceBlur / 24)) : 0
-  readonly property real panelRadius: customAppearanceEnabled
+  // One radius token keeps every plugin surface and control in the same
+  // visual language. Circles (status dots, swatches, knobs) remain explicit.
+  readonly property real uiRadius: customAppearanceEnabled
     ? appearanceRadius : Style.cornerRadius
-  readonly property real nestedRadius: Math.max(0, panelRadius - Style.space(2))
-  readonly property real compactRadius: panelRadius > 0
-    ? Math.max(Style.space(6), panelRadius - Style.space(4)) : 0
+  readonly property real panelRadius: uiRadius
+  readonly property real nestedRadius: uiRadius
+  readonly property real compactRadius: uiRadius
+  readonly property bool deviceColorsActive: customAppearanceEnabled
+    && !appearanceAutoAccent && appearanceDeviceColorsEnabled
   readonly property int motionFast: 140
   readonly property int motionStandard: 220
   readonly property int motionEmphasis: 300
@@ -121,9 +147,12 @@ Panel {
   property bool setupTransitioning: false
   property bool setupTransitionClosing: false
   property bool setupBusy: false
+  property bool connectionEditing: false
+  property bool connectionReconnecting: false
   property bool localServerBusy: false
   property bool localServerConfirming: false
   property bool localServerReady: false
+  property bool localServerExpanded: false
   property string localServerMessage: ""
   property string localServerError: ""
   property bool resetAppConfirming: false
@@ -145,12 +174,15 @@ Panel {
   property bool turnOnAllBusy: false
   property string turnOnAllMessage: ""
   property string turnOnAllError: ""
-  property bool advancedControls: true
+  // One setting controls the main remote and every experimental per-AC card.
+  // The helper key remains advanced_controls for compatibility with existing
+  // installations.
+  property bool showClimateControls: true
   property bool masterSwitchEnabled: false
   property bool masterSwitchEnabledPrevious: false
   property bool preferenceBusy: false
   property string preferenceKind: ""
-  property bool advancedControlsPrevious: true
+  property bool showClimateControlsPrevious: true
   property string temperatureDisplay: "both"
   property string temperatureDisplayPrevious: "both"
   property bool historyEnabled: false
@@ -181,14 +213,82 @@ Panel {
   property string settingsSection: "preferences"
   property bool setupSucceeded: false
   property string setupUrl: "http://homeassistant.local:8123"
+  property string activeHomeAssistantUrl: ""
   property string setupToken: ""
   property string setupError: ""
   property string setupPayload: ""
   property string selectionPayload: ""
   property string setupSelectedEntity: ""
   property var setupEntityOptions: []
+  readonly property var appearanceDevicePalette: [
+    "#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7", "#83A6A1",
+    "#C28C85", "#89A7B2"
+  ]
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
+
+  function normalizeAppearanceDeviceColors(value) {
+    var source = value
+    if (typeof source === "string") {
+      try { source = JSON.parse(source) } catch (error) { return ({}) }
+    }
+    if (!source || typeof source !== "object" || Array.isArray(source)) return ({})
+    var next = {}
+    var count = 0
+    for (var id in source) {
+      var normalizedId = String(id || "").trim()
+      var color = String(source[id] || "").trim().toUpperCase()
+      if (!/^climate\.[A-Za-z0-9_-]+$/.test(normalizedId)
+          || !/^#[0-9A-F]{6}$/.test(color)) continue
+      next[normalizedId] = color
+      count += 1
+      if (count >= 12) break
+    }
+    return next
+  }
+
+  function copyAppearanceDeviceColors() {
+    var next = {}
+    var current = appearanceDeviceColors || ({})
+    for (var id in current) next[id] = current[id]
+    return next
+  }
+
+  function appearanceColorIndex(entityId) {
+    var id = String(entityId || "")
+    var index = selectedEntities.indexOf(id)
+    return index >= 0 ? index : 0
+  }
+
+  function appearanceDeviceColor(entityId) {
+    var id = String(entityId || "")
+    var colors = appearanceDeviceColors || ({})
+    if (colors[id] && /^#[0-9A-Fa-f]{6}$/.test(String(colors[id])))
+      return String(colors[id]).toUpperCase()
+    if (appearanceDevicePalette.length > 0)
+      return appearanceDevicePalette[appearanceColorIndex(id) % appearanceDevicePalette.length]
+    return root.accentColor
+  }
+
+  function appearanceDeviceColorText(entityId) {
+    return appearanceDeviceColor(entityId)
+  }
+
+  function deviceCardAccent(entityId) {
+    return deviceColorsActive ? appearanceDeviceColor(entityId) : root.accentColor
+  }
+
+  function deviceControlAccent(entityId) {
+    return deviceColorsActive ? appearanceDeviceColor(entityId) : root.controlAccentColor
+  }
+
+  function isLocalHomeAssistantUrl(value) {
+    var text = String(value || "").trim().toLowerCase().replace(/\/+$/, "")
+    return text === "http://127.0.0.1:8123"
+      || text === "http://localhost:8123"
+      || text === "https://127.0.0.1:8123"
+      || text === "https://localhost:8123"
+  }
 
   readonly property var dropdownOptions: [{
     value: "",
@@ -219,12 +319,22 @@ Panel {
     { value: "custom", label: "CUSTOM" },
   ] : [])
   readonly property var settingsSections: [
-    { value: "setup", label: "SETUP" },
     { value: "preferences", label: "PREFERENCES" },
     { value: "experimental", label: "EXPERIMENTAL" },
     { value: "maintenance", label: "MAINTENANCE" },
   ]
   readonly property bool setupCanSubmit: !setupBusy
+    && !preferenceBusy
+    && !localServerBusy
+    && !remoteHistoryBusy
+    && !remoteHistorySourceBusy
+    && !resetAppBusy
+    && !uninstallBusy
+    && !masterSwitchBusy
+    && String(setupUrl || "").trim() !== ""
+    && String(setupToken || "").trim() !== ""
+    && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
+  readonly property bool reconnectCanSubmit: !setupBusy
     && !preferenceBusy
     && !localServerBusy
     && !remoteHistoryBusy
@@ -255,7 +365,16 @@ Panel {
   readonly property bool isOn: connected
     && (hasLocalPower ? localPower : (actualIsOn || modeRestarting))
   readonly property string unit: connected ? String(reading.unit || "°C") : "°C"
+  readonly property string sourceTemperatureUnitCode: root.temperatureUnitCode(unit)
+  readonly property string displayTemperatureUnitCode: {
+    var requested = root.normalizeTemperatureUnitPreference(temperatureUnitPreference)
+    if (requested === "kelvin" && !experimentalKelvinEnabled) requested = "source"
+    return requested === "source" ? sourceTemperatureUnitCode : requested
+  }
+  readonly property string displayTemperatureUnit: root.temperatureUnitSymbol(displayTemperatureUnitCode)
   readonly property string ambientText: connected ? temperature(reading.ambient) : "..."
+  readonly property color ambientTemperatureTint: root.temperatureTint(
+    root.mainAmbientValue(), unit)
   readonly property string mainAmbientText: connected
     ? (multiUnitActive ? root.averageAmbientText() : ambientText) : "..."
   readonly property string barAmbientText: connected ? formatBarAmbient() : "..."
@@ -271,7 +390,7 @@ Panel {
     ? localFanMode : String(reading.fan_mode || "")
   readonly property var modeOptions: formatControlOptions(reading.hvac_modes, true)
   readonly property var fanModeOptions: formatControlOptions(reading.fan_modes, false)
-  readonly property bool advancedControlsVisible: advancedControls && connected
+  readonly property bool climateControlsVisible: showClimateControls && connected
     && (isOn || modeRestarting || localMode !== "")
     && (modeOptions.length > 0 || fanModeOptions.length > 0)
   readonly property string modeText: activeMode !== "" ? controlLabel(activeMode) : "MODE"
@@ -292,8 +411,9 @@ Panel {
       if (Number(item.timestamp) >= cutoff) {
         next.push({
           timestamp: Number(item.timestamp),
-          temperature: Number(item.temperature),
-          unit: String(item.unit || unit),
+          temperature: root.convertTemperature(
+            Number(item.temperature), String(item.unit || unit), displayTemperatureUnitCode),
+          unit: displayTemperatureUnit,
         })
       }
     }
@@ -309,13 +429,15 @@ Panel {
   }
   readonly property string historySourceLabel: historySource === "server"
     ? "EXTERNAL · " + historyServerLabel : "LOCAL · LOGGED WHILE PC IS ON"
-  readonly property real historyPingMs: {
+  readonly property real homeAssistantPingMs: {
     var value = Number(reading.ping_ms)
     return isFinite(value) && value >= 0 ? value : -1
   }
   readonly property string historyEmptyMessage: historySource === "server"
     ? (String(reading.history_error || "") !== "" ? "EXTERNAL LOG UNAVAILABLE" : "WAITING FOR EXTERNAL LOG…")
     : "WAITING FOR LOCAL READINGS…"
+  readonly property bool localHomeAssistantConfigured: root.isLocalHomeAssistantUrl(activeHomeAssistantUrl)
+  readonly property bool localHomeAssistantConnected: localHomeAssistantConfigured && connected
   readonly property color stateColor: connected && isOn ? root.accentColor : dim
   readonly property color statusColor: hasLocalPower ? root.accentColor : stateColor
   readonly property string deviceInfoText: connected ? String(reading.device_info || "Home Assistant climate") : "Home Assistant climate"
@@ -336,6 +458,16 @@ Panel {
     ? Number(reading.max_temp) : 30
   readonly property real temperatureStep: connected && isFinite(Number(reading.step))
     && Number(reading.step) > 0 ? Number(reading.step) : 1
+  readonly property real displayMinimumTemperature:
+    root.convertTemperature(minimumTemperature, unit, displayTemperatureUnitCode)
+  readonly property real displayMaximumTemperature:
+    root.convertTemperature(maximumTemperature, unit, displayTemperatureUnitCode)
+  readonly property real displayTemperatureStep: {
+    var start = root.convertTemperature(minimumTemperature, unit, displayTemperatureUnitCode)
+    var end = root.convertTemperature(minimumTemperature + temperatureStep, unit, displayTemperatureUnitCode)
+    var result = Math.abs(end - start)
+    return isFinite(result) && result > 0 ? result : 1
+  }
   readonly property string barLabel: connected
     ? (barIsOn
        ? "󰜗 " + barAmbientText + "\u2009\u2009→\u2009\u2009" + targetText
@@ -351,15 +483,87 @@ Panel {
        + (hasLocalPower && powerCanCancel ? " · right-click to cancel" : ""))
     : "Daikin AC Controls · click to connect"
 
-  function formatTemperatureValue(value, displayUnit) {
+  function normalizeTemperatureUnitPreference(value) {
+    var text = String(value || "").trim().toLowerCase()
+    return ["source", "celsius", "fahrenheit", "kelvin"].indexOf(text) >= 0
+      ? text : "source"
+  }
+
+  function temperatureUnitCode(value) {
+    var text = String(value || "").trim().toLowerCase()
+    if (text === "f" || text === "°f" || text === "fahrenheit") return "fahrenheit"
+    if (text === "k" || text === "kelvin") return "kelvin"
+    return "celsius"
+  }
+
+  function temperatureUnitSymbol(value) {
+    var code = root.temperatureUnitCode(value)
+    if (code === "fahrenheit") return "°F"
+    if (code === "kelvin") return "K"
+    return "°C"
+  }
+
+  function convertTemperature(value, sourceUnit, targetUnit) {
     var parsed = Number(value)
-    if (!isFinite(parsed)) return "..."
-    var rounded = Math.round(parsed * 10) / 10
-    return String(rounded).replace(/\.0$/, "") + String(displayUnit || unit)
+    if (!isFinite(parsed)) return Number.NaN
+    var source = root.temperatureUnitCode(sourceUnit)
+    var target = root.temperatureUnitCode(targetUnit)
+    var celsius = source === "fahrenheit" ? (parsed - 32) * 5 / 9
+      : source === "kelvin" ? parsed - 273.15 : parsed
+    if (target === "fahrenheit") return celsius * 9 / 5 + 32
+    if (target === "kelvin") return celsius + 273.15
+    return celsius
+  }
+
+  function formatTemperatureValue(value, sourceUnit) {
+    var converted = root.convertTemperature(value, sourceUnit, displayTemperatureUnitCode)
+    if (!isFinite(converted)) return "..."
+    var rounded = Math.round(converted * 10) / 10
+    return String(rounded).replace(/\.0$/, "") + displayTemperatureUnit
+  }
+
+  function temperatureValueFontSize(text, normalSize) {
+    var digits = String(text || "").replace(/[^0-9]/g, "").length
+    return digits >= 3 ? Math.max(Style.font.display, normalSize - Style.space(4)) : normalSize
   }
 
   function temperature(value) {
     return formatTemperatureValue(value, unit)
+  }
+
+  function formatAverageTemperatureValue(value, displayUnit) {
+    var parsed = Number(value)
+    if (!isFinite(parsed)) return "..."
+    if (averageTemperatureDecimals) return formatTemperatureValue(parsed, displayUnit)
+    var converted = root.convertTemperature(parsed, displayUnit, displayTemperatureUnitCode)
+    if (!isFinite(converted)) return "..."
+    return String(Math.round(converted)) + displayTemperatureUnit
+  }
+
+  function mixTemperatureColors(first, second, amount) {
+    var t = Math.max(0, Math.min(1, Number(amount)))
+    return Qt.rgba(
+      first.r + (second.r - first.r) * t,
+      first.g + (second.g - first.g) * t,
+      first.b + (second.b - first.b) * t,
+      1)
+  }
+
+  function temperatureTint(value, sourceUnit) {
+    var parsed = root.convertTemperature(value, sourceUnit, "celsius")
+    if (!isFinite(parsed)) return root.foreground
+
+    var blue = Qt.rgba(0.36, 0.55, 0.66, 1)
+    var green = Qt.rgba(0.46, 0.64, 0.53, 1)
+    var amber = Qt.rgba(0.73, 0.59, 0.40, 1)
+    var warm = Qt.rgba(0.76, 0.45, 0.40, 1)
+    var hot = Qt.rgba(0.84, 0.27, 0.29, 1)
+
+    if (parsed <= 24) return blue
+    if (parsed < 27) return root.mixTemperatureColors(blue, green, (parsed - 24) / 3)
+    if (parsed < 30) return root.mixTemperatureColors(green, amber, (parsed - 27) / 3)
+    if (parsed < 33) return root.mixTemperatureColors(amber, warm, (parsed - 30) / 3)
+    return root.mixTemperatureColors(warm, hot, Math.min(1, (parsed - 33) / 2))
   }
 
   function unitReading(entityId) {
@@ -592,7 +796,7 @@ Panel {
     var value = root.averageAmbientValue()
     var readings = unitReadings.length > 0 ? unitReadings : [reading]
     var firstUnit = readings.length > 0 ? String(readings[0].unit || unit) : unit
-    return formatTemperatureValue(value, firstUnit)
+    return formatAverageTemperatureValue(value, firstUnit)
   }
 
   function averageAmbientValue() {
@@ -646,7 +850,7 @@ Panel {
         sum += value
         count += 1
       }
-      if (count > 0 && sameUnits) return formatTemperatureValue(sum / count, firstUnit)
+      if (count > 0 && sameUnits) return formatAverageTemperatureValue(sum / count, firstUnit)
     }
     var labels = []
     for (var k = 0; k < readings.length; k++) {
@@ -864,6 +1068,16 @@ Panel {
     globalSyncControlsPrevious = globalSyncControls
     syncNonPowerControls = parsed.sync_non_power_controls !== false
     syncNonPowerControlsPrevious = syncNonPowerControls
+    averageTemperatureDecimals = parsed.average_temperature_decimals === true
+    averageTemperatureDecimalsPrevious = averageTemperatureDecimals
+    temperatureUnitPreference = root.normalizeTemperatureUnitPreference(parsed.temperature_unit)
+    temperatureUnitPreferencePrevious = temperatureUnitPreference
+    experimentalKelvinEnabled = parsed.experimental_kelvin_enabled === true
+    experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
+    if (!experimentalKelvinEnabled && temperatureUnitPreference === "kelvin") {
+      temperatureUnitPreference = "source"
+      temperatureUnitPreferencePrevious = temperatureUnitPreference
+    }
     selectedEntities = normalizeSelectedEntities(parsed.selected_entities, selectedEntity)
     var parsedBarMode = String(parsed.bar_temperature_mode || "average")
     barTemperatureMode = ["average", "all", "single", "selected"].indexOf(parsedBarMode) >= 0
@@ -878,11 +1092,21 @@ Panel {
     experimentalHistoryEnabledPrevious = experimentalHistoryEnabled
     customAppearanceEnabled = parsed.custom_appearance_enabled === true
     customAppearanceEnabledPrevious = customAppearanceEnabled
+    appearanceAutoAccent = parsed.appearance_auto_accent !== false
+    appearanceAutoAccentPrevious = appearanceAutoAccent
     customAccentHexText = String(parsed.appearance_accent || "#8FA79F")
     customAccentHexTextPrevious = customAccentHexText
     customAccentColor = customAccentHexText
     customAccentColorPrevious = customAccentColor
-    appearanceTransparency = Math.max(0, Math.min(70, Number(parsed.appearance_transparency) || 0))
+    customControlHexText = String(parsed.appearance_control || "#8FA79F")
+    customControlHexTextPrevious = customControlHexText
+    customControlColor = customControlHexText
+    customControlColorPrevious = customControlColor
+    appearanceDeviceColorsEnabled = parsed.appearance_device_colors_enabled === true
+    appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
+    appearanceDeviceColors = normalizeAppearanceDeviceColors(parsed.appearance_device_colors)
+    appearanceDeviceColorsPrevious = copyAppearanceDeviceColors()
+    appearanceTransparency = Math.max(0, Math.min(100, Number(parsed.appearance_transparency) || 0))
     appearanceTransparencyPrevious = appearanceTransparency
     appearanceTransparencyText = formatAppearanceValue(appearanceTransparency)
     appearanceBlur = Math.max(0, Math.min(24, Number(parsed.appearance_blur) || 0))
@@ -963,6 +1187,9 @@ Panel {
     if (setupProcess.running || setupTransitioning) return
     localServerConfirmTimer.stop()
     localServerConfirming = false
+    connectionEditing = false
+    connectionReconnecting = false
+    localServerExpanded = false
     setupError = ""
     setupEntityOptions = []
     setupSelectedEntity = ""
@@ -986,6 +1213,10 @@ Panel {
     setupTransitionFinishTimer.stop()
     localServerConfirmTimer.stop()
     localServerConfirming = false
+    connectionEditing = false
+    connectionReconnecting = false
+    if (activeHomeAssistantUrl !== "") setupUrl = activeHomeAssistantUrl
+    setupToken = ""
     if (remoteHistoryReconfiguring && !remoteHistoryBusy)
       root.cancelRemoteHistoryReconfigure()
     else {
@@ -1010,20 +1241,40 @@ Panel {
     root.refresh()
   }
 
-  function submitSetup() {
-    if (!root.setupCanSubmit) return
+  function submitSetup(reconnect) {
+    if (reconnect === true ? !root.reconnectCanSubmit : !root.setupCanSubmit) return
     setupError = ""
     setupSucceeded = false
+    connectionReconnecting = reconnect === true
     setupPayload = JSON.stringify({
       url: String(setupUrl || "").trim(),
       token: String(setupToken || "").trim(),
       entity_id: setupSelectedEntity,
-      advanced_controls: root.advancedControls,
+      advanced_controls: root.showClimateControls,
       master_switch_enabled: root.masterSwitchEnabled,
     })
     setupBusy = true
     setupProcess.command = ["python3", root.helperPath, "configure"]
     setupProcess.running = true
+  }
+
+  function beginReconnect() {
+    if (setupBusy || preferenceBusy || !configured) return
+    connectionEditing = true
+    connectionReconnecting = false
+    setupError = ""
+    setupToken = ""
+    setupUrl = activeHomeAssistantUrl || setupUrl
+    setupSelectedEntity = selectedEntity
+  }
+
+  function cancelReconnect() {
+    if (setupBusy) return
+    connectionEditing = false
+    connectionReconnecting = false
+    setupError = ""
+    setupToken = ""
+    if (activeHomeAssistantUrl !== "") setupUrl = activeHomeAssistantUrl
   }
 
   function setHistorySource(value) {
@@ -1042,7 +1293,7 @@ Panel {
   }
 
   function openHomeAssistantSettings() {
-    var url = String(setupUrl || "").trim()
+    var url = String(activeHomeAssistantUrl || setupUrl || "").trim()
     if (url === "") {
       remoteHistoryError = "Set the Home Assistant address first."
       return
@@ -1511,17 +1762,21 @@ Panel {
         setupOpen = true
         setupTransitioning = false
         setupTransitionClosing = false
+        connectionEditing = false
+        connectionReconnecting = false
         setupUrl = "http://homeassistant.local:8123"
+        activeHomeAssistantUrl = ""
         setupToken = ""
         setupError = ""
         setupEntityOptions = []
         setupSelectedEntity = ""
         localServerReady = false
         localServerConfirming = false
+        localServerExpanded = false
         localServerMessage = ""
         localServerError = ""
-        advancedControls = true
-        advancedControlsPrevious = true
+        showClimateControls = true
+        showClimateControlsPrevious = true
         masterSwitchEnabled = false
         masterSwitchEnabledPrevious = false
         temperatureDisplay = "both"
@@ -1541,6 +1796,12 @@ Panel {
         globalSyncControlsPrevious = true
         syncNonPowerControls = true
         syncNonPowerControlsPrevious = true
+        averageTemperatureDecimals = false
+        averageTemperatureDecimalsPrevious = false
+        temperatureUnitPreference = "source"
+        temperatureUnitPreferencePrevious = "source"
+        experimentalKelvinEnabled = false
+        experimentalKelvinEnabledPrevious = false
         selectedEntities = []
         barTemperatureMode = "average"
         barTemperatureModePrevious = "average"
@@ -1552,6 +1813,8 @@ Panel {
         experimentalHistoryEnabledPrevious = false
         customAppearanceEnabled = false
         customAppearanceEnabledPrevious = false
+        appearanceAutoAccent = true
+        appearanceAutoAccentPrevious = true
         customAccentColor = "#8FA79F"
         customAccentColorPrevious = "#8FA79F"
         customAccentHexText = "#8FA79F"
@@ -1603,9 +1866,10 @@ Panel {
         return
       }
       configured = parsed.configured === true
-      advancedControls = parsed.advanced_controls !== undefined
+      if (configured && settingsSection === "setup") settingsSection = "preferences"
+      showClimateControls = parsed.advanced_controls !== undefined
         ? parsed.advanced_controls === true : true
-      advancedControlsPrevious = advancedControls
+      showClimateControlsPrevious = showClimateControls
       masterSwitchEnabled = parsed.master_switch_enabled === true
       masterSwitchEnabledPrevious = masterSwitchEnabled
       temperatureDisplay = ["ambient", "target", "both"].indexOf(String(parsed.temperature_display || "both")) !== -1
@@ -1624,7 +1888,10 @@ Panel {
       remoteHistoryPortText = String(parsed.history_remote_port || "22")
       remoteHistoryUrl = String(parsed.history_remote_url || root.remoteHistoryDefaultUrl)
       remoteHistoryPath = String(parsed.history_remote_path || root.remoteHistoryDefaultPath)
-      if (parsed.url) setupUrl = String(parsed.url)
+      if (parsed.url) {
+        setupUrl = String(parsed.url)
+        activeHomeAssistantUrl = setupUrl
+      }
       if (parsed.entity_id) {
         selectedEntity = String(parsed.entity_id)
         setupSelectedEntity = selectedEntity
@@ -1643,6 +1910,7 @@ Panel {
 
   function applySetupResult(raw) {
     var text = String(raw || "").trim()
+    var wasReconnect = connectionReconnecting
     if (text === "") {
       setupError = "The Home Assistant setup helper returned no data."
       return
@@ -1660,11 +1928,13 @@ Panel {
       if (parsed && parsed.ok === true && parsed.configured === true) {
         configured = true
         configResolved = true
-        setupOpen = false
         setupError = ""
         setupToken = ""
         setupEntityOptions = []
-        if (parsed.url) setupUrl = String(parsed.url)
+        if (parsed.url) {
+          setupUrl = String(parsed.url)
+          activeHomeAssistantUrl = setupUrl
+        }
         if (parsed.entity_id) {
           selectedEntity = String(parsed.entity_id)
           setupSelectedEntity = selectedEntity
@@ -1672,8 +1942,8 @@ Panel {
         if (parsed.entities) setEntityOptions(parsed.entities)
         root.applyExperimentalValues(parsed)
         if (parsed.advanced_controls !== undefined) {
-          advancedControls = parsed.advanced_controls === true
-          advancedControlsPrevious = advancedControls
+          showClimateControls = parsed.advanced_controls === true
+          showClimateControlsPrevious = showClimateControls
         }
         if (parsed.master_switch_enabled !== undefined) {
           masterSwitchEnabled = parsed.master_switch_enabled === true
@@ -1711,6 +1981,14 @@ Panel {
           remoteHistoryUrl = String(parsed.history_remote_url || root.remoteHistoryDefaultUrl)
         if (parsed.history_remote_path !== undefined)
           remoteHistoryPath = String(parsed.history_remote_path || root.remoteHistoryDefaultPath)
+        if (wasReconnect) {
+          connectionReconnecting = false
+          connectionEditing = false
+          setupSucceeded = false
+          Qt.callLater(root.refresh)
+          return
+        }
+        setupOpen = false
         setupSucceeded = true
         return
       }
@@ -2141,12 +2419,12 @@ Panel {
     root.requestUnitPower(id, state.power === "turning_on" ? "off" : "on", false, dueAt)
   }
 
-  function setAdvancedControlsEnabled(value) {
+  function setShowClimateControlsEnabled(value) {
     if (preferenceProcess.running) return
     var next = value === true
-    if (next === advancedControls) return
-    advancedControlsPrevious = advancedControls
-    advancedControls = next
+    if (next === showClimateControls) return
+    showClimateControlsPrevious = showClimateControls
+    showClimateControls = next
     preferenceKind = "advanced_controls"
     preferenceBusy = true
     preferenceProcess.command = [
@@ -2187,6 +2465,17 @@ Panel {
       "python3", root.helperPath, "set-preference", "temperature_display", next
     ]
     preferenceProcess.running = true
+  }
+
+  function setTemperatureUnit(value) {
+    if (preferenceProcess.running) return
+    var next = root.normalizeTemperatureUnitPreference(value)
+    if (["celsius", "fahrenheit"].indexOf(next) < 0
+        && !(next === "kelvin" && experimentalKelvinEnabled)) return
+    if (next === temperatureUnitPreference) return
+    temperatureUnitPreferencePrevious = temperatureUnitPreference
+    temperatureUnitPreference = next
+    root.beginPreference("temperature_unit", next)
   }
 
   function setHistoryEnabled(value) {
@@ -2241,6 +2530,24 @@ Panel {
     root.beginPreference("sync_non_power_controls", next ? "on" : "off")
   }
 
+  function setAverageTemperatureDecimals(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === averageTemperatureDecimals) return
+    averageTemperatureDecimalsPrevious = averageTemperatureDecimals
+    averageTemperatureDecimals = next
+    root.beginPreference("average_temperature_decimals", next ? "on" : "off")
+  }
+
+  function setExperimentalKelvinEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === experimentalKelvinEnabled) return
+    experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
+    experimentalKelvinEnabled = next
+    root.beginPreference("experimental_kelvin_enabled", next ? "on" : "off")
+  }
+
   function setBarTemperatureMode(value) {
     if (preferenceProcess.running) return
     var next = String(value || "").toLowerCase()
@@ -2291,24 +2598,80 @@ Panel {
     root.beginPreference("custom_appearance_enabled", next ? "on" : "off")
   }
 
-  function setAppearanceHex(value) {
+  function setAppearanceAutoAccent(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === appearanceAutoAccent) return
+    appearanceAutoAccentPrevious = appearanceAutoAccent
+    appearanceAutoAccent = next
+    root.beginPreference("appearance_auto_accent", next ? "on" : "off")
+  }
+
+  function setAppearanceDeviceColorsEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === appearanceDeviceColorsEnabled) return
+    appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
+    appearanceDeviceColorsEnabled = next
+    root.beginPreference("appearance_device_colors_enabled", next ? "on" : "off")
+  }
+
+  function resetCustomisations() {
+    if (preferenceProcess.running) return
+    preferenceKind = "reset_appearance"
+    preferenceBusy = true
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "reset_appearance", "default"
+    ]
+    preferenceProcess.running = true
+  }
+
+  function setAppearanceColor(name, value) {
     if (preferenceProcess.running) return
     var next = String(value || "").trim().toUpperCase()
     if (!/^#[0-9A-F]{6}$/.test(next)) {
-      errorText = "Use a six-digit hex color such as #8FA79F."
+      errorText = "Use a six-digit hex colour such as #8FA79F."
       return
     }
-    customAccentHexTextPrevious = customAccentHexText
-    customAccentColorPrevious = customAccentColor
-    customAccentHexText = next
-    customAccentColor = next
-    root.beginPreference("appearance_accent", next)
+    if (name === "appearance_accent") {
+      customAccentHexTextPrevious = customAccentHexText
+      customAccentColorPrevious = customAccentColor
+      customAccentHexText = next
+      customAccentColor = next
+    } else if (name === "appearance_control") {
+      customControlHexTextPrevious = customControlHexText
+      customControlColorPrevious = customControlColor
+      customControlHexText = next
+      customControlColor = next
+    } else {
+      return
+    }
+    root.beginPreference(name, next)
+  }
+
+  function setAppearanceHex(value) {
+    root.setAppearanceColor("appearance_accent", value)
+  }
+
+  function setAppearanceDeviceColor(entityId, value) {
+    if (preferenceProcess.running) return
+    var id = String(entityId || "").trim()
+    var nextColor = String(value || "").trim().toUpperCase()
+    if (!/^climate\.[A-Za-z0-9_-]+$/.test(id) || !/^#[0-9A-F]{6}$/.test(nextColor)) {
+      errorText = "Use a six-digit hex colour such as #8FA79F."
+      return
+    }
+    var next = root.copyAppearanceDeviceColors()
+    next[id] = nextColor
+    appearanceDeviceColorsPrevious = root.copyAppearanceDeviceColors()
+    appearanceDeviceColors = next
+    root.beginPreference("appearance_device_colors", JSON.stringify(next))
   }
 
   function setAppearanceNumber(name, value) {
     if (preferenceProcess.running) return
     var limits = {
-      appearance_transparency: [0, 70],
+      appearance_transparency: [0, 100],
       appearance_blur: [0, 24],
       appearance_radius: [8, 32],
     }
@@ -2385,7 +2748,7 @@ Panel {
   }
 
   function restorePreference(kind) {
-    if (kind === "advanced_controls") advancedControls = advancedControlsPrevious
+    if (kind === "advanced_controls") showClimateControls = showClimateControlsPrevious
     else if (kind === "master_switch_enabled") masterSwitchEnabled = masterSwitchEnabledPrevious
     else if (kind === "temperature_display") temperatureDisplay = temperatureDisplayPrevious
     else if (kind === "history_enabled") historyEnabled = historyEnabledPrevious
@@ -2397,15 +2760,29 @@ Panel {
     } else if (kind === "multi_unit_enabled") multiUnitEnabled = multiUnitEnabledPrevious
     else if (kind === "global_sync_controls") globalSyncControls = globalSyncControlsPrevious
     else if (kind === "sync_non_power_controls") syncNonPowerControls = syncNonPowerControlsPrevious
+    else if (kind === "average_temperature_decimals")
+      averageTemperatureDecimals = averageTemperatureDecimalsPrevious
+    else if (kind === "temperature_unit")
+      temperatureUnitPreference = temperatureUnitPreferencePrevious
+    else if (kind === "experimental_kelvin_enabled")
+      experimentalKelvinEnabled = experimentalKelvinEnabledPrevious
     else if (kind === "bar_temperature_mode") barTemperatureMode = barTemperatureModePrevious
     else if (kind === "bar_temperature_entity") barTemperatureEntity = barTemperatureEntityPrevious
     else if (kind === "bar_temperature_entities") barTemperatureEntities = barTemperatureEntitiesPrevious.slice()
     else if (kind === "experimental_history_enabled")
       experimentalHistoryEnabled = experimentalHistoryEnabledPrevious
     else if (kind === "custom_appearance_enabled") customAppearanceEnabled = customAppearanceEnabledPrevious
+    else if (kind === "appearance_auto_accent") appearanceAutoAccent = appearanceAutoAccentPrevious
     else if (kind === "appearance_accent") {
       customAccentHexText = customAccentHexTextPrevious
       customAccentColor = customAccentColorPrevious
+    } else if (kind === "appearance_control") {
+      customControlHexText = customControlHexTextPrevious
+      customControlColor = customControlColorPrevious
+    } else if (kind === "appearance_device_colors_enabled") {
+      appearanceDeviceColorsEnabled = appearanceDeviceColorsEnabledPrevious
+    } else if (kind === "appearance_device_colors") {
+      appearanceDeviceColors = normalizeAppearanceDeviceColors(appearanceDeviceColorsPrevious)
     } else if (kind === "appearance_transparency") {
       appearanceTransparency = appearanceTransparencyPrevious
       appearanceTransparencyText = formatAppearanceValue(appearanceTransparency)
@@ -2428,6 +2805,15 @@ Panel {
     } else if (name === "sync_non_power_controls") {
       syncNonPowerControls = value === true
       syncNonPowerControlsPrevious = syncNonPowerControls
+    } else if (name === "average_temperature_decimals") {
+      averageTemperatureDecimals = value === true
+      averageTemperatureDecimalsPrevious = averageTemperatureDecimals
+    } else if (name === "temperature_unit") {
+      temperatureUnitPreference = root.normalizeTemperatureUnitPreference(value)
+      temperatureUnitPreferencePrevious = temperatureUnitPreference
+    } else if (name === "experimental_kelvin_enabled") {
+      experimentalKelvinEnabled = value === true
+      experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
     } else if (name === "bar_temperature_mode") {
       barTemperatureMode = String(value || "average")
       barTemperatureModePrevious = barTemperatureMode
@@ -2443,11 +2829,25 @@ Panel {
     } else if (name === "custom_appearance_enabled") {
       customAppearanceEnabled = value === true
       customAppearanceEnabledPrevious = customAppearanceEnabled
+    } else if (name === "appearance_auto_accent") {
+      appearanceAutoAccent = value === true
+      appearanceAutoAccentPrevious = appearanceAutoAccent
     } else if (name === "appearance_accent") {
       customAccentHexText = String(value || customAccentHexText)
       customAccentColor = customAccentHexText
       customAccentHexTextPrevious = customAccentHexText
       customAccentColorPrevious = customAccentColor
+    } else if (name === "appearance_control") {
+      customControlHexText = String(value || customControlHexText)
+      customControlColor = customControlHexText
+      customControlHexTextPrevious = customControlHexText
+      customControlColorPrevious = customControlColor
+    } else if (name === "appearance_device_colors_enabled") {
+      appearanceDeviceColorsEnabled = value === true
+      appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
+    } else if (name === "appearance_device_colors") {
+      appearanceDeviceColors = normalizeAppearanceDeviceColors(value)
+      appearanceDeviceColorsPrevious = copyAppearanceDeviceColors()
     } else if (name === "appearance_transparency") {
       appearanceTransparency = Number(value)
       appearanceTransparencyPrevious = appearanceTransparency
@@ -2476,9 +2876,37 @@ Panel {
     try {
       var parsed = JSON.parse(text)
       if (parsed && parsed.ok === true) {
-        if (parsed.preference === "advanced_controls" && parsed.value !== undefined) {
-          advancedControls = parsed.value === true
-          advancedControlsPrevious = advancedControls
+        if (parsed.preference === "reset_appearance" && parsed.appearance_reset === true) {
+          customAppearanceEnabled = parsed.custom_appearance_enabled === true
+          customAppearanceEnabledPrevious = customAppearanceEnabled
+          appearanceAutoAccent = parsed.appearance_auto_accent !== false
+          appearanceAutoAccentPrevious = appearanceAutoAccent
+          customAccentHexText = String(parsed.appearance_accent || "#8FA79F")
+          customAccentHexTextPrevious = customAccentHexText
+          customAccentColor = customAccentHexText
+          customAccentColorPrevious = customAccentColor
+          customControlHexText = String(parsed.appearance_control || "#8FA79F")
+          customControlHexTextPrevious = customControlHexText
+          customControlColor = customControlHexText
+          customControlColorPrevious = customControlColor
+          appearanceDeviceColorsEnabled = parsed.appearance_device_colors_enabled === true
+          appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
+          appearanceDeviceColors = normalizeAppearanceDeviceColors(parsed.appearance_device_colors)
+          appearanceDeviceColorsPrevious = copyAppearanceDeviceColors()
+          appearanceTransparency = Math.max(0, Math.min(100, Number(parsed.appearance_transparency) || 0))
+          appearanceTransparencyPrevious = appearanceTransparency
+          appearanceTransparencyText = formatAppearanceValue(appearanceTransparency)
+          appearanceBlur = Math.max(0, Math.min(24, Number(parsed.appearance_blur) || 0))
+          appearanceBlurPrevious = appearanceBlur
+          appearanceBlurText = formatAppearanceValue(appearanceBlur)
+          appearanceRadius = Math.max(8, Math.min(32, Number(parsed.appearance_radius) || 16))
+          appearanceRadiusPrevious = appearanceRadius
+          appearanceRadiusText = formatAppearanceValue(appearanceRadius)
+          setupError = ""
+          return
+        } else if (parsed.preference === "advanced_controls" && parsed.value !== undefined) {
+          showClimateControls = parsed.value === true
+          showClimateControlsPrevious = showClimateControls
         } else if (parsed.preference === "master_switch_enabled" && parsed.value !== undefined) {
           masterSwitchEnabled = parsed.value === true
           masterSwitchEnabledPrevious = masterSwitchEnabled
@@ -2508,6 +2936,10 @@ Panel {
             historyHoursPrevious = historyHours
             historyCustomPrevious = historyCustom
             customHistoryHoursText = root.formatHours(historyHours)
+          } else if (parsed.preference === "experimental_kelvin_enabled"
+              && parsed.temperature_unit !== undefined) {
+            temperatureUnitPreference = root.normalizeTemperatureUnitPreference(parsed.temperature_unit)
+            temperatureUnitPreferencePrevious = temperatureUnitPreference
           }
         } else {
           root.restorePreference(preferenceKind)
@@ -2529,7 +2961,11 @@ Panel {
   function adjustTarget(direction) {
     if (masterSwitchBusy || !connected || !isOn
         || targetValue === null || targetValue === undefined) return
-    var next = normalizeTarget(Number(targetValue) + direction * temperatureStep)
+    var currentDisplay = root.convertTemperature(
+      Number(targetValue), unit, displayTemperatureUnitCode)
+    var nextDisplay = currentDisplay + direction * displayTemperatureStep
+    var next = normalizeTarget(root.convertTemperature(
+      nextDisplay, displayTemperatureUnitCode, unit))
     if (next === null) return
     localTarget = next
     temperatureCommitTimer.restart()
@@ -2537,7 +2973,8 @@ Panel {
 
   function previewTarget(value) {
     if (masterSwitchBusy || !connected || !isOn) return
-    var next = normalizeTarget(value)
+    var next = normalizeTarget(root.convertTemperature(
+      value, displayTemperatureUnitCode, unit))
     if (next === null) return
     localTarget = next
   }
@@ -2963,7 +3400,7 @@ Panel {
     onTriggered: {
       root.setupOpen = true
       root.setupTransitionClosing = false
-      Qt.callLater(function() {
+      if (!root.configured) Qt.callLater(function() {
         if (root.setupOpen && root.setupTransitioning) setupUrlField.forceActiveFocus()
       })
       setupTransitionFinishTimer.restart()
@@ -2997,6 +3434,9 @@ Panel {
       setupTransitionFinishTimer.stop()
       setupTransitioning = false
       setupTransitionClosing = false
+      connectionEditing = false
+      connectionReconnecting = false
+      localServerExpanded = false
       if (remoteHistoryReconfiguring && !remoteHistoryBusy)
         root.cancelRemoteHistoryReconfigure()
       else remoteHistoryReconfiguring = false
@@ -3004,6 +3444,9 @@ Panel {
   }
 
   onSettingsSectionChanged: {
+    if (settingsSection !== "maintenance" && connectionEditing && !setupBusy)
+      root.cancelReconnect()
+    if (settingsSection !== "maintenance") localServerExpanded = false
     if (settingsSection !== "setup" && remoteHistoryReconfiguring
         && !remoteHistoryBusy) root.cancelRemoteHistoryReconfigure()
   }
@@ -3055,7 +3498,7 @@ Panel {
       anchors.fill: parent
       anchors.margins: -Style.space(8) * root.appearanceSoftness
       z: -2
-      radius: root.panelRadius + Style.space(8) * root.appearanceSoftness
+      radius: root.panelRadius
       color: root.alpha(root.accentColor, root.appearanceSoftness * 0.08)
       opacity: root.appearanceSoftness
     }
@@ -3064,7 +3507,9 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.setupOpen && (setupUrlField.activeFocus
-        || setupTokenField.activeFocus || setupEntityDropdown.popupOpen
+        || setupTokenField.activeFocus || reconnectUrlField.activeFocus
+        || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
+        || reconnectEntityDropdown.popupOpen
         || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
         || remoteHistoryUrlField.activeFocus)
       onCloseRequested: root.setupOpen && root.configured ? root.cancelSetup() : root.close()
@@ -3168,7 +3613,7 @@ Panel {
                 && !root.uninstallBusy && !root.uninstallConfirming
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               background: root.alpha(root.accentColor, 0.08)
               bordered: true
               radius: root.compactRadius
@@ -3204,7 +3649,7 @@ Panel {
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(3)
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   background: root.alpha(root.foreground, 0.025)
                   bordered: true
                   selected: root.settingsSection === modelData.value
@@ -3218,7 +3663,7 @@ Panel {
 
         BorderSurface {
           id: setupCard
-          visible: !root.configured || root.settingsSection === "setup"
+          visible: !root.configured
           width: parent.width
           implicitHeight: setupForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
@@ -3284,7 +3729,7 @@ Panel {
               placeholderText: "http://homeassistant.local:8123"
               text: root.setupUrl
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               font.family: root.fontFamily
               inputMethodHints: Qt.ImhUrlCharactersOnly
               selectByMouse: true
@@ -3321,7 +3766,7 @@ Panel {
                 : "Paste your Home Assistant token"
               text: root.setupToken
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               font.family: root.fontFamily
               selectByMouse: true
               onTextChanged: if (text !== root.setupToken) root.setupToken = text
@@ -3348,7 +3793,7 @@ Panel {
               foreground: root.foreground
               background: Color.popups.background
               popupBorder: Color.popups.border
-              accent: root.accentColor
+              accent: root.controlAccentColor
               fontFamily: root.fontFamily
               controlRadius: root.compactRadius
               onChanged: function(value) { root.setupSelectedEntity = value }
@@ -3438,12 +3883,12 @@ Panel {
                   width: parent.width
                   label: "Show climate controls"
                   description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
-                  checked: root.advancedControls
+                  checked: root.showClimateControls
                   enabled: !root.setupBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   fontFamily: root.fontFamily
-                  onClicked: root.advancedControls = !root.advancedControls
+                  onClicked: root.showClimateControls = !root.showClimateControls
                 }
 
                 Toggle {
@@ -3453,7 +3898,7 @@ Panel {
                   checked: root.masterSwitchEnabled
                   enabled: !root.setupBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   onClicked: root.masterSwitchEnabled = !root.masterSwitchEnabled
                 }
@@ -3492,7 +3937,7 @@ Panel {
               enabled: root.setupCanSubmit
               fontFamily: root.fontFamily
               foreground: Color.popups.background
-              accent: root.accentColor
+              accent: root.controlAccentColor
               background: root.accentColor
               bordered: false
               radius: root.compactRadius
@@ -3514,13 +3959,13 @@ Panel {
               width: parent.width
               height: Style.space(40)
               text: "HOME ASSISTANT SETTINGS"
-              iconText: "↗"
+              iconText: "󰏌"
               iconSize: Style.font.body
               fontSize: Style.font.bodySmall
               enabled: !root.setupBusy && !root.localServerBusy
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: true
               radius: root.compactRadius
@@ -3544,7 +3989,7 @@ Panel {
 
         BorderSurface {
           id: localServerCard
-          visible: !root.configured || root.settingsSection === "setup"
+          visible: !root.configured
           width: parent.width
           implicitHeight: localServerForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
@@ -3702,7 +4147,7 @@ Panel {
                 fontSize: Style.font.caption
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.025)
                 bordered: true
                 radius: root.compactRadius
@@ -3789,12 +4234,12 @@ Panel {
               width: parent.width
               label: "Show climate controls"
               description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
-              checked: root.advancedControls
+              checked: root.showClimateControls
               enabled: !root.setupBusy && !root.preferenceBusy
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               fontFamily: root.fontFamily
-              onClicked: root.setAdvancedControlsEnabled(!root.advancedControls)
+              onClicked: root.setShowClimateControlsEnabled(!root.showClimateControls)
             }
 
             Toggle {
@@ -3804,7 +4249,7 @@ Panel {
               checked: root.masterSwitchEnabled
               enabled: !root.setupBusy && !root.preferenceBusy
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               fontFamily: root.fontFamily
               onClicked: root.setMasterSwitchEnabled(!root.masterSwitchEnabled)
             }
@@ -3831,130 +4276,254 @@ Panel {
               }
             }
 
-            Text {
+            BorderSurface {
+              id: barTemperaturesSettingsCard
               width: parent.width
-              text: "BAR TEMPERATURES"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 0.8
-            }
+              implicitHeight: barTemperaturesSettingsForm.implicitHeight + Style.space(20)
+              color: root.alpha(root.foreground, 0.018)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              radius: root.compactRadius
 
-            Text {
-              width: parent.width
-              text: "Choose whether the bar shows the ambient temperature, target temperature, or both."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+              Column {
+                id: barTemperaturesSettingsForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(7)
 
-            Row {
-              id: temperatureDisplayChoices
-              width: parent.width
-              spacing: Style.space(6)
+                Text {
+                  width: parent.width
+                  text: "BAR TEMPERATURES"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
 
-              Repeater {
-                model: [
-                  { value: "ambient", label: "AMBIENT" },
-                  { value: "target", label: "TARGET" },
-                  { value: "both", label: "BOTH" },
-                ]
+                Text {
+                  width: parent.width
+                  text: "Choose whether the bar shows the ambient temperature, target temperature, or both."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
 
-                Button {
-                  required property var modelData
-                  width: (temperatureDisplayChoices.width
-                    - temperatureDisplayChoices.spacing * 2) / 3
-                  height: Style.space(34)
-                  text: modelData.label
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(4)
-                  foreground: root.foreground
-                  accent: root.accentColor
-                  background: root.alpha(root.foreground, 0.025)
-                  bordered: true
-                  selected: root.temperatureDisplay === modelData.value
-                  enabled: !root.preferenceBusy
-                  radius: root.compactRadius
-                  tooltipText: "Show " + modelData.label.toLowerCase() + " temperature in the bar"
-                  onClicked: root.setTemperatureDisplay(modelData.value)
+                Row {
+                  id: temperatureDisplayChoices
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Repeater {
+                    model: [
+                      { value: "ambient", label: "AMBIENT" },
+                      { value: "target", label: "TARGET" },
+                      { value: "both", label: "BOTH" },
+                    ]
+
+                    Button {
+                      required property var modelData
+                      width: (temperatureDisplayChoices.width
+                        - temperatureDisplayChoices.spacing * 2) / 3
+                      height: Style.space(34)
+                      text: modelData.label
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.space(4)
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      background: root.alpha(root.foreground, 0.025)
+                      bordered: true
+                      selected: root.temperatureDisplay === modelData.value
+                      enabled: !root.preferenceBusy
+                      radius: root.compactRadius
+                      tooltipText: "Show " + modelData.label.toLowerCase() + " temperature in the bar"
+                      onClicked: root.setTemperatureDisplay(modelData.value)
+                    }
+                  }
                 }
               }
             }
 
-            Text {
+            BorderSurface {
+              id: temperatureUnitSettingsCard
               width: parent.width
-              text: "HISTORY SOURCE"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 0.8
-            }
+              implicitHeight: temperatureUnitSettingsForm.implicitHeight + Style.space(20)
+              color: root.alpha(root.foreground, 0.018)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              radius: root.compactRadius
 
-            Text {
-              width: parent.width
-              text: "Choose where the ambient chart is recorded."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+              Column {
+                id: temperatureUnitSettingsForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(7)
 
-            Row {
-              id: historySourceChoices
-              width: parent.width
-              spacing: Style.space(6)
+                Text {
+                  width: parent.width
+                  text: "TEMPERATURE UNIT"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
 
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                height: Style.space(34)
-                text: "LOCAL"
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(4)
-                foreground: root.foreground
-                accent: root.accentColor
-                background: root.alpha(root.foreground, 0.025)
-                bordered: true
-                selected: root.historySource === "local"
-                enabled: !root.preferenceBusy
-                radius: root.compactRadius
-                tooltipText: "Log on this PC while it is on"
-                onClicked: root.setHistorySource("local")
+                Text {
+                  width: parent.width
+                  text: "Choose the unit shown by the panel and chart. Controls are converted before they are sent to Home Assistant."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+
+                Row {
+                  id: temperatureUnitChoices
+                  readonly property int optionCount: root.experimentalKelvinEnabled ? 3 : 2
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Repeater {
+                    model: [
+                      { value: "celsius", label: "CELSIUS" },
+                      { value: "fahrenheit", label: "FAHRENHEIT" },
+                    ].concat(root.experimentalKelvinEnabled
+                      ? [{ value: "kelvin", label: "KELVIN" }] : [])
+
+                    Button {
+                      required property var modelData
+                      width: (temperatureUnitChoices.width
+                        - temperatureUnitChoices.spacing * (temperatureUnitChoices.optionCount - 1))
+                        / temperatureUnitChoices.optionCount
+                      height: Style.space(34)
+                      text: modelData.label
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.space(3)
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      background: root.alpha(root.foreground, 0.025)
+                      bordered: true
+                      selected: root.displayTemperatureUnitCode === modelData.value
+                      enabled: !root.preferenceBusy
+                      radius: root.compactRadius
+                      tooltipText: "Show temperatures in " + modelData.label.toLowerCase()
+                      onClicked: root.setTemperatureUnit(modelData.value)
+                    }
+                  }
+                }
               }
-
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                height: Style.space(34)
-                text: "EXTERNAL SERVER"
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(4)
-                foreground: root.foreground
-                accent: root.accentColor
-                background: root.alpha(root.foreground, 0.025)
-                bordered: true
-                selected: root.historySource === "server"
-                enabled: !root.preferenceBusy
-                radius: root.compactRadius
-                tooltipText: "Log on the same external host that runs Home Assistant"
-                onClicked: root.setHistorySource("server")
-              }
             }
 
-            Toggle {
+            BorderSurface {
+              id: historySettingsGroup
               width: parent.width
-              label: "Ambient temperature history"
-              description: root.historySource === "server"
-                ? "Show the server's ambient log in the main panel."
-                : "Show the ambient log saved on this PC in the main panel."
-              checked: root.historyEnabled
-              enabled: !root.setupBusy && !root.preferenceBusy
-              foreground: root.foreground
-              accent: root.accentColor
-              fontFamily: root.fontFamily
-              onClicked: root.setHistoryEnabled(!root.historyEnabled)
-            }
+              implicitHeight: historySettingsGroupForm.implicitHeight + Style.space(20)
+              color: root.alpha(root.foreground, 0.018)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              radius: root.compactRadius
+
+              Column {
+                id: historySettingsGroupForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(7)
+
+                BorderSurface {
+                  id: historySourceSettingsCard
+                  width: parent.width
+                  implicitHeight: historySourceSettingsForm.implicitHeight + Style.space(20)
+                  color: root.alpha(root.foreground, 0.012)
+                  borderSpec: Border.flat(root.alpha(root.foreground, 0.06), 1)
+                  radius: root.compactRadius
+
+                  Column {
+                    id: historySourceSettingsForm
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Style.space(10)
+                    spacing: Style.space(7)
+
+                    Text {
+                      width: parent.width
+                      text: "HISTORY SOURCE"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      font.letterSpacing: 0.8
+                    }
+
+                    Text {
+                      width: parent.width
+                      text: "Choose where the ambient chart is recorded."
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      wrapMode: Text.WordWrap
+                    }
+
+                    Row {
+                      id: historySourceChoices
+                      width: parent.width
+                      spacing: Style.space(6)
+
+                      Button {
+                        width: (parent.width - parent.spacing) / 2
+                        height: Style.space(34)
+                        text: "LOCAL"
+                        fontSize: Style.font.caption
+                        horizontalPadding: Style.space(4)
+                        foreground: root.foreground
+                        accent: root.controlAccentColor
+                        background: root.alpha(root.foreground, 0.025)
+                        bordered: true
+                        selected: root.historySource === "local"
+                        enabled: !root.preferenceBusy
+                        radius: root.compactRadius
+                        tooltipText: "Log on this PC while it is on"
+                        onClicked: root.setHistorySource("local")
+                      }
+
+                      Button {
+                        width: (parent.width - parent.spacing) / 2
+                        height: Style.space(34)
+                        text: "EXTERNAL SERVER"
+                        fontSize: Style.font.caption
+                        horizontalPadding: Style.space(4)
+                        foreground: root.foreground
+                        accent: root.controlAccentColor
+                        background: root.alpha(root.foreground, 0.025)
+                        bordered: true
+                        selected: root.historySource === "server"
+                        enabled: !root.preferenceBusy
+                        radius: root.compactRadius
+                        tooltipText: "Log on the same external host that runs Home Assistant"
+                        onClicked: root.setHistorySource("server")
+                      }
+                    }
+
+                    Toggle {
+                      width: parent.width
+                      label: "Ambient temperature history"
+                      description: root.historySource === "server"
+                        ? "Show the server's ambient log in the main panel."
+                        : "Show the ambient log saved on this PC in the main panel."
+                      checked: root.historyEnabled
+                      enabled: !root.setupBusy && !root.preferenceBusy
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      fontFamily: root.fontFamily
+                      onClicked: root.setHistoryEnabled(!root.historyEnabled)
+                    }
+                  }
+                }
 
             Column {
               id: remoteHistorySection
@@ -4034,13 +4603,27 @@ Panel {
                         font.letterSpacing: 0.8
                       }
 
-                      Text {
+                      Row {
                         width: parent.width
-                        text: "PAIRED · CONNECTED"
-                        color: root.accentColor
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
+                        spacing: Style.space(4)
+
+                        Text {
+                          text: "PAIRED ·"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                        }
+
+                        ServerStatus {
+                          id: externalHistoryConnectionStatus
+                          connected: root.connected
+                          pingMs: root.homeAssistantPingMs
+                          hideConnectedDot: true
+                          foreground: root.foreground
+                          urgentColor: root.urgent
+                          fontFamily: root.fontFamily
+                        }
                       }
                     }
                   }
@@ -4074,7 +4657,7 @@ Panel {
                     fontSize: Style.font.caption
                     fontFamily: root.fontFamily
                     foreground: root.foreground
-                    accent: root.accentColor
+                    accent: root.controlAccentColor
                     background: root.alpha(root.foreground, 0.025)
                     bordered: true
                     radius: root.compactRadius
@@ -4159,7 +4742,7 @@ Panel {
                       anchors.verticalCenter: parent.verticalCenter
                       anchors.leftMargin: Style.space(10)
                       anchors.rightMargin: Style.space(10)
-                      text: "SAFE BY DESIGN · Reviewable source files only. No sudo, package installs, open ports, telemetry, or Home Assistant control calls. One user timer reads the selected climate states and writes one owner-only 31-day file on the external host."
+                      text: "SAFE BY DESIGN · Reviewable source files only. No sudo, package installs, open ports, telemetry, or Home Assistant control calls. One user timer reads every available climate state and writes one owner-only 31-day file on the external host."
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -4194,7 +4777,7 @@ Panel {
                         placeholderText: "user@server-ip"
                         enabled: !root.remoteHistoryBusy
                         foreground: root.foreground
-                        accent: root.accentColor
+                        accent: root.controlAccentColor
                         font.family: root.fontFamily
                         selectByMouse: true
                         onTextChanged: if (text !== root.remoteHistoryTarget)
@@ -4225,7 +4808,7 @@ Panel {
                         placeholderText: "22"
                         enabled: !root.remoteHistoryBusy
                         foreground: root.foreground
-                        accent: root.accentColor
+                        accent: root.controlAccentColor
                         font.family: root.fontFamily
                         inputMethodHints: Qt.ImhFormattedNumbersOnly
                         selectByMouse: true
@@ -4253,7 +4836,7 @@ Panel {
                     placeholderText: root.remoteHistoryDefaultUrl
                     enabled: !root.remoteHistoryBusy
                     foreground: root.foreground
-                    accent: root.accentColor
+                    accent: root.controlAccentColor
                     font.family: root.fontFamily
                     inputMethodHints: Qt.ImhUrlCharactersOnly
                     selectByMouse: true
@@ -4286,7 +4869,7 @@ Panel {
                       fontSize: Style.font.caption
                       fontFamily: root.fontFamily
                       foreground: Color.popups.background
-                      accent: root.accentColor
+                      accent: root.controlAccentColor
                       background: root.accentColor
                       bordered: false
                       radius: root.compactRadius
@@ -4316,7 +4899,7 @@ Panel {
                       fontSize: Style.font.caption
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.accentColor
+                      accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: true
                       radius: root.compactRadius
@@ -4335,13 +4918,13 @@ Panel {
                       width: parent.width
                       height: Style.space(38)
                       text: "GUIDE"
-                      iconText: "↗"
+                      iconText: "󰏌"
                       iconSize: Style.font.body
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(3)
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.accentColor
+                      accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: true
                       radius: root.compactRadius
@@ -4364,7 +4947,7 @@ Panel {
                       horizontalPadding: Style.space(3)
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.accentColor
+                      accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: true
                       radius: root.compactRadius
@@ -4445,7 +5028,7 @@ Panel {
                     fontSize: Style.font.caption
                     horizontalPadding: Style.space(2)
                     foreground: root.foreground
-                    accent: root.accentColor
+                    accent: root.controlAccentColor
                     background: root.alpha(root.foreground, 0.025)
                     bordered: true
                     selected: modelData.value === "custom"
@@ -4484,7 +5067,7 @@ Panel {
                   placeholderText: "Hours (1–" + root.historyMaximumHours() + ")"
                   enabled: !root.preferenceBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   font.family: root.fontFamily
                   inputMethodHints: Qt.ImhFormattedNumbersOnly
                   selectByMouse: true
@@ -4501,7 +5084,7 @@ Panel {
                   fontSize: Style.font.caption
                   enabled: !root.preferenceBusy
                   foreground: Color.popups.background
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   background: root.accentColor
                   bordered: false
                   radius: root.compactRadius
@@ -4519,8 +5102,10 @@ Panel {
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
               }
+              }
             }
           }
+        }
         }
 
         BorderSurface {
@@ -4572,7 +5157,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: Style.space(10)
                 anchors.rightMargin: Style.space(10)
-                text: "EXPERIMENTAL · These options are opt-in and may change."
+                text: "EXPERIMENTAL · Optional extras; some details may be less polished."
                 color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -4587,7 +5172,7 @@ Panel {
               checked: root.multiUnitEnabled
               enabled: !root.preferenceBusy && root.selectedEntities.length > 0
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               fontFamily: root.fontFamily
               onClicked: root.setMultiUnitEnabled(!root.multiUnitEnabled)
             }
@@ -4611,7 +5196,7 @@ Panel {
                 checked: root.globalSyncControls
                 enabled: !root.preferenceBusy && root.selectedEntities.length > 1
                 foreground: root.foreground
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 onClicked: root.setGlobalSyncControls(!root.globalSyncControls)
               }
@@ -4639,7 +5224,7 @@ Panel {
                   checked: root.syncNonPowerControls
                   enabled: !root.preferenceBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   onClicked: root.setSyncNonPowerControls(!root.syncNonPowerControls)
                 }
@@ -4688,8 +5273,8 @@ Panel {
                   model: [
                     { value: "average", label: "AVG" },
                     { value: "all", label: "ALL" },
-                    { value: "single", label: "ONE" },
-                    { value: "selected", label: "PICK" },
+                    { value: "single", label: "CURRENT" },
+                    { value: "selected", label: "SELECT" },
                   ]
 
                   Button {
@@ -4701,7 +5286,7 @@ Panel {
                     fontSize: Style.font.caption
                     horizontalPadding: Style.space(2)
                     foreground: root.foreground
-                    accent: root.accentColor
+                    accent: root.controlAccentColor
                     background: root.alpha(root.foreground, 0.025)
                     bordered: true
                     selected: root.barTemperatureMode === modelData.value
@@ -4726,7 +5311,7 @@ Panel {
                 foreground: root.foreground
                 background: Color.popups.background
                 popupBorder: Color.popups.border
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 controlRadius: root.compactRadius
                 enabled: !root.preferenceBusy
@@ -4751,7 +5336,7 @@ Panel {
                     leftAlign: true
                     horizontalPadding: Style.space(10)
                     foreground: root.foreground
-                    accent: root.accentColor
+                    accent: root.controlAccentColor
                     background: root.alpha(root.accentColor,
                       root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? 0.10 : 0.025)
                     bordered: true
@@ -4766,12 +5351,36 @@ Panel {
 
             Toggle {
               width: parent.width
+              label: "Decimal average"
+              description: "Show one decimal for averaged temperatures. Off keeps the average compact at a whole degree."
+              checked: root.averageTemperatureDecimals
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              onClicked: root.setAverageTemperatureDecimals(!root.averageTemperatureDecimals)
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Kelvin option"
+              description: "Add Kelvin to the temperature-unit choices as an experimental display option."
+              checked: root.experimentalKelvinEnabled
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              onClicked: root.setExperimentalKelvinEnabled(!root.experimentalKelvinEnabled)
+            }
+
+            Toggle {
+              width: parent.width
               label: "Extended chart history"
               description: "Unlock 7-day, 30-day, and custom ranges. An always-on external logger is recommended for long recordings."
               checked: root.experimentalHistoryEnabled
               enabled: !root.preferenceBusy
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               fontFamily: root.fontFamily
               onClicked: root.setExperimentalHistoryEnabled(!root.experimentalHistoryEnabled)
             }
@@ -4791,7 +5400,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: Style.space(10)
                 anchors.rightMargin: Style.space(10)
-                text: "Includes 7-day, 30-day, and custom ranges up to 744 hours. For long recordings, an always-on external logger on the Home Assistant host is recommended. Reinstall its timer after changing the selected AC list."
+                text: "Includes 7-day, 30-day, and custom ranges up to 744 hours. For long recordings, an always-on external logger on the Home Assistant host is recommended. It discovers available climate entities automatically."
                 color: root.accentColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -4804,12 +5413,12 @@ Panel {
               width: parent.width
               height: Style.space(34)
               text: "EXTERNAL SERVER SETTINGS"
-              iconText: "↗"
+              iconText: "󰏌"
               iconSize: Style.font.body
               fontSize: Style.font.caption
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: true
               radius: root.compactRadius
@@ -4820,7 +5429,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "CUSTOMISATION"
+              text: "EXTRA CUSTOMISATIONS"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -4830,53 +5439,23 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Choose the plugin accent and visual finish. Auto follows Omarchy; Custom keeps your choices."
+              text: "Adjust the plugin's accent and visual finish. Omarchy remains the default."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
 
-            Row {
-              id: appearanceModeChoices
+            Toggle {
               width: parent.width
-              spacing: Style.space(6)
-
-              Button {
-                width: (appearanceModeChoices.width - appearanceModeChoices.spacing) / 2
-                height: Style.space(34)
-                text: "AUTO · OMARCHY"
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(3)
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                accent: root.accentColor
-                background: root.alpha(root.foreground, 0.025)
-                bordered: true
-                selected: !root.customAppearanceEnabled
-                enabled: !root.preferenceBusy
-                radius: root.compactRadius
-                tooltipText: "Follow Omarchy's current accent"
-                onClicked: root.setCustomAppearanceEnabled(false)
-              }
-
-              Button {
-                width: (appearanceModeChoices.width - appearanceModeChoices.spacing) / 2
-                height: Style.space(34)
-                text: "CUSTOM"
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(3)
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                accent: root.accentColor
-                background: root.alpha(root.foreground, 0.025)
-                bordered: true
-                selected: root.customAppearanceEnabled
-                enabled: !root.preferenceBusy
-                radius: root.compactRadius
-                tooltipText: "Use the custom accent and finish below"
-                onClicked: root.setCustomAppearanceEnabled(true)
-              }
+              label: "Extra customisations"
+              description: "Apply the visual options below. Turn it off to use the standard Omarchy finish."
+              checked: root.customAppearanceEnabled
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              onClicked: root.setCustomAppearanceEnabled(!root.customAppearanceEnabled)
             }
 
             Column {
@@ -4891,79 +5470,108 @@ Panel {
               Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
               Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-              Text {
+              Toggle {
                 width: parent.width
-                text: "ACCENT COLOR"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 0.8
+                label: "Auto · Omarchy accent"
+                description: "Follow Omarchy's current accent. Turn this off to choose a fixed colour."
+                checked: root.appearanceAutoAccent
+                enabled: !root.preferenceBusy
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                fontFamily: root.fontFamily
+                onClicked: root.setAppearanceAutoAccent(!root.appearanceAutoAccent)
               }
 
-              Row {
-                id: appearanceSwatches
+              AppearanceColorRow {
+                id: appearanceAccentRow
+                visible: !root.appearanceAutoAccent
                 width: parent.width
+                label: "ACCENT COLOUR"
+                valueColor: root.customAccentColor
+                valueText: root.customAccentHexText
+                swatches: ["#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7"]
+                foreground: root.foreground
+                accent: root.interactionAccentColor
+                fontFamily: root.fontFamily
+                enabled: !root.preferenceBusy
+                onSubmitted: function(value) {
+                  root.setAppearanceColor("appearance_accent", value)
+                }
+              }
+
+              AppearanceColorRow {
+                id: appearanceControlRow
+                visible: !root.appearanceAutoAccent
+                width: parent.width
+                label: "SWITCH & SLIDER COLOUR"
+                valueColor: root.customControlColor
+                valueText: root.customControlHexText
+                swatches: ["#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7"]
+                foreground: root.foreground
+                accent: root.interactionAccentColor
+                fontFamily: root.fontFamily
+                enabled: !root.preferenceBusy
+                onSubmitted: function(value) {
+                  root.setAppearanceColor("appearance_control", value)
+                }
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Per-device colours"
+                description: root.appearanceAutoAccent
+                  ? "Turn off Auto · Omarchy accent to assign colours to individual AC cards."
+                  : "Give each selected AC its own accent on the panel."
+                checked: root.appearanceDeviceColorsEnabled
+                enabled: !root.preferenceBusy && !root.appearanceAutoAccent
+                  && root.selectedEntities.length > 0
+                foreground: root.foreground
+                accent: root.interactionAccentColor
+                fontFamily: root.fontFamily
+                onClicked: root.setAppearanceDeviceColorsEnabled(
+                  !root.appearanceDeviceColorsEnabled)
+              }
+
+              Column {
+                id: appearanceDeviceColorOptions
+                visible: root.deviceColorsActive || height > 0.5
+                width: parent.width
+                height: root.deviceColorsActive ? implicitHeight : 0
+                opacity: root.deviceColorsActive ? 1 : 0
+                clip: true
                 spacing: Style.space(6)
 
-                Repeater {
-                  model: ["#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7"]
+                Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-                  Button {
-                    required property var modelData
-                    width: Style.space(30)
-                    height: Style.space(30)
-                    text: ""
-                    fontFamily: root.fontFamily
-                    foreground: modelData
-                    accent: modelData
-                    background: modelData
-                    bordered: true
-                    radius: width / 2
-                    selected: root.customAccentHexText.toUpperCase() === String(modelData).toUpperCase()
-                    enabled: !root.preferenceBusy
-                    tooltipText: "Use " + modelData + " as the accent"
-                    onClicked: root.setAppearanceHex(modelData)
-                  }
-                }
-
-              }
-
-              Row {
-                id: appearanceHexRow
-                width: parent.width
-                spacing: Style.space(7)
-
-                TextField {
-                  id: appearanceHexField
-                  width: parent.width - appearanceHexApplyButton.width - parent.spacing
-                  height: Style.space(30)
-                  text: root.customAccentHexText
-                  placeholderText: "#RRGGBB"
-                  enabled: !root.preferenceBusy
-                  foreground: root.foreground
-                  accent: root.accentColor
+                Text {
+                  width: parent.width
+                  text: "AC CARD COLOURS"
+                  color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  selectByMouse: true
-                  onTextChanged: if (text !== root.customAccentHexText) root.customAccentHexText = text
-                  onAccepted: root.setAppearanceHex(text)
+                  font.bold: true
+                  font.letterSpacing: 0.8
                 }
 
-                Button {
-                  id: appearanceHexApplyButton
-                  width: Style.space(60)
-                  height: Style.space(30)
-                  text: "APPLY"
-                  fontSize: Style.font.caption
-                  fontFamily: root.fontFamily
-                  foreground: Color.popups.background
-                  accent: root.accentColor
-                  background: root.accentColor
-                  bordered: false
-                  radius: root.compactRadius
-                  enabled: !root.preferenceBusy
-                  onClicked: root.setAppearanceHex(appearanceHexField.text)
+                Repeater {
+                  model: root.selectedEntities
+
+                  AppearanceColorRow {
+                    required property var modelData
+                    width: appearanceDeviceColorOptions.width
+                    label: root.entityDisplayName(modelData)
+                    valueColor: root.appearanceDeviceColor(modelData)
+                    valueText: root.appearanceDeviceColorText(modelData)
+                    swatches: root.appearanceDevicePalette
+                    foreground: root.foreground
+                    accent: root.interactionAccentColor
+                    fontFamily: root.fontFamily
+                    enabled: !root.preferenceBusy
+                    onSubmitted: function(value) {
+                      root.setAppearanceDeviceColor(String(modelData), value)
+                    }
+                  }
                 }
               }
 
@@ -4987,15 +5595,15 @@ Panel {
                   height: Style.space(28)
                   value: root.appearanceTransparency
                   minimum: 0
-                  maximum: 70
+                  maximum: 100
                   step: 1
                   integer: true
                   bar: root.bar
                   trackHeight: Style.space(3)
                   knobSize: Style.space(12)
-                  trackColor: root.alpha(root.accentColor, 0.22)
-                  fillColor: root.accentColor
-                  knobColor: root.accentColor
+                  trackColor: root.alpha(root.controlAccentColor, 0.22)
+                  fillColor: root.controlAccentColor
+                  knobColor: root.controlAccentColor
                   onMoved: function(value) {
                     root.appearanceTransparency = value
                     root.appearanceTransparencyText = root.formatAppearanceValue(value)
@@ -5010,7 +5618,7 @@ Panel {
                   text: root.appearanceTransparencyText
                   enabled: !root.preferenceBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   horizontalAlignment: Text.AlignHCenter
@@ -5047,9 +5655,9 @@ Panel {
                   bar: root.bar
                   trackHeight: Style.space(3)
                   knobSize: Style.space(12)
-                  trackColor: root.alpha(root.accentColor, 0.22)
-                  fillColor: root.accentColor
-                  knobColor: root.accentColor
+                  trackColor: root.alpha(root.controlAccentColor, 0.22)
+                  fillColor: root.controlAccentColor
+                  knobColor: root.controlAccentColor
                   onMoved: function(value) {
                     root.appearanceBlur = value
                     root.appearanceBlurText = root.formatAppearanceValue(value)
@@ -5064,7 +5672,7 @@ Panel {
                   text: root.appearanceBlurText
                   enabled: !root.preferenceBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   horizontalAlignment: Text.AlignHCenter
@@ -5082,7 +5690,7 @@ Panel {
                 Text {
                   width: Style.space(92)
                   height: Style.space(28)
-                  text: "CORNERS"
+                  text: "CORNER RADIUS"
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -5101,9 +5709,9 @@ Panel {
                   bar: root.bar
                   trackHeight: Style.space(3)
                   knobSize: Style.space(12)
-                  trackColor: root.alpha(root.accentColor, 0.22)
-                  fillColor: root.accentColor
-                  knobColor: root.accentColor
+                  trackColor: root.alpha(root.controlAccentColor, 0.22)
+                  fillColor: root.controlAccentColor
+                  knobColor: root.controlAccentColor
                   onMoved: function(value) {
                     root.appearanceRadius = value
                     root.appearanceRadiusText = root.formatAppearanceValue(value)
@@ -5118,7 +5726,7 @@ Panel {
                   text: root.appearanceRadiusText
                   enabled: !root.preferenceBusy
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   horizontalAlignment: Text.AlignHCenter
@@ -5136,6 +5744,512 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
+              }
+
+              Button {
+                width: parent.width
+                height: Style.space(34)
+                visible: root.customAppearanceEnabled
+                text: root.preferenceKind === "reset_appearance"
+                  ? "RESETTING…" : "RESET CUSTOMISATIONS"
+                fontSize: Style.font.caption
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                background: root.alpha(root.foreground, 0.025)
+                bordered: true
+                radius: root.compactRadius
+                enabled: !root.preferenceBusy
+                tooltipText: "Restore the default visual values without changing this switch"
+                onClicked: root.resetCustomisations()
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: connectionMaintenanceCard
+          visible: root.configured && root.settingsSection === "maintenance"
+          width: parent.width
+          implicitHeight: connectionMaintenanceForm.implicitHeight + Style.space(24)
+          radius: root.panelRadius
+          color: root.alpha(root.accentColor, 0.035)
+          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+
+          Column {
+            id: connectionMaintenanceForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(12)
+            spacing: Style.space(8)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Text {
+                width: Style.space(30)
+                height: Style.space(30)
+                text: "󰒓"
+                color: root.accentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.display
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+              }
+
+              Column {
+                width: parent.width - Style.space(38)
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: "HOME ASSISTANT CONNECTION"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+
+                Row {
+                  id: currentConnectionRow
+                  width: parent.width
+                  spacing: Style.space(5)
+
+                  Text {
+                    width: parent.width - currentConnectionStatus.implicitWidth - parent.spacing
+                    text: root.activeHomeAssistantUrl || root.setupUrl
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideMiddle
+                  }
+
+                  ServerStatus {
+                    id: currentConnectionStatus
+                    connected: root.connected
+                    pingMs: root.homeAssistantPingMs
+                    foreground: root.foreground
+                    urgentColor: root.urgent
+                    fontFamily: root.fontFamily
+                  }
+                }
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                id: reconnectToggleButton
+                width: parent.width - maintenanceHomeAssistantSettingsButton.width - parent.spacing
+                height: Style.space(38)
+                text: root.connectionEditing ? "CANCEL" : "RECONFIGURE"
+                iconText: root.connectionEditing ? "󰅖" : "󰑐"
+                iconSize: Style.font.body
+                fontSize: Style.font.bodySmall
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                background: root.alpha(root.accentColor, 0.08)
+                bordered: true
+                radius: root.compactRadius
+                enabled: !root.setupBusy && !root.localServerBusy && !root.preferenceBusy
+                tooltipText: root.connectionEditing
+                  ? "Discard connection changes" : "Change the Home Assistant address or token"
+                onClicked: root.connectionEditing
+                  ? root.cancelReconnect() : root.beginReconnect()
+              }
+
+              Button {
+                id: maintenanceHomeAssistantSettingsButton
+                width: Style.space(196)
+                height: Style.space(38)
+                text: "HOME ASSISTANT SETTINGS"
+                iconText: "󰏌"
+                iconSize: Style.font.body
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(3)
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                background: root.alpha(root.foreground, 0.025)
+                bordered: true
+                radius: root.compactRadius
+                enabled: !root.setupBusy && !root.localServerBusy
+                tooltipText: "Open the current Home Assistant address"
+                onClicked: root.openHomeAssistantSettings()
+              }
+            }
+
+            Column {
+              id: reconnectEditor
+              visible: root.connectionEditing || height > 0.5
+              width: parent.width
+              height: root.connectionEditing ? implicitHeight : 0
+              opacity: root.connectionEditing ? 1 : 0
+              clip: true
+              spacing: Style.space(7)
+
+              Behavior on height {
+                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+              }
+              Behavior on opacity {
+                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+              }
+
+              Text {
+                text: "HOME ASSISTANT ADDRESS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              TextField {
+                id: reconnectUrlField
+                width: parent.width
+                enabled: root.connectionEditing && !root.setupBusy
+                placeholderText: "http://homeassistant.local:8123"
+                text: root.setupUrl
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                font.family: root.fontFamily
+                inputMethodHints: Qt.ImhUrlCharactersOnly
+                selectByMouse: true
+                onTextChanged: if (text !== root.setupUrl) root.setupUrl = text
+                onAccepted: reconnectTokenField.forceActiveFocus()
+                Keys.onEscapePressed: root.cancelReconnect()
+              }
+
+              Text {
+                width: parent.width
+                text: "Use the address of the Home Assistant server you are already connected to."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Text {
+                text: "LONG-LIVED ACCESS TOKEN"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              TextField {
+                id: reconnectTokenField
+                width: parent.width
+                enabled: root.connectionEditing && !root.setupBusy
+                password: true
+                placeholderText: "Paste a token for this server"
+                text: root.setupToken
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                font.family: root.fontFamily
+                selectByMouse: true
+                onTextChanged: if (text !== root.setupToken) root.setupToken = text
+                onAccepted: root.submitSetup(true)
+                Keys.onEscapePressed: root.cancelReconnect()
+              }
+
+              AcDropdown {
+                id: reconnectEntityDropdown
+                visible: root.setupEntityOptions.length > 0
+                width: parent.width
+                label: "AIR CONDITIONER"
+                options: root.setupDropdownOptions
+                value: root.setupSelectedEntity
+                foreground: root.foreground
+                background: Color.popups.background
+                popupBorder: Color.popups.border
+                accent: root.controlAccentColor
+                fontFamily: root.fontFamily
+                controlRadius: root.compactRadius
+                onChanged: function(value) { root.setupSelectedEntity = value }
+              }
+
+              Button {
+                width: parent.width
+                height: Style.space(38)
+                text: root.setupBusy ? "RECONFIGURING…" : "RECONFIGURE"
+                iconText: root.setupBusy ? "" : "󰑐"
+                iconSize: Style.font.body
+                fontSize: Style.font.bodySmall
+                fontFamily: root.fontFamily
+                enabled: root.reconnectCanSubmit && root.connectionEditing
+                foreground: Color.popups.background
+                accent: root.controlAccentColor
+                background: root.accentColor
+                bordered: false
+                radius: root.compactRadius
+                onClicked: root.submitSetup(true)
+
+                LoadingRing {
+                  visible: root.setupBusy
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(14)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(16)
+                  height: width
+                  color: Color.popups.background
+                  strokeWidth: Style.space(2)
+                }
+              }
+
+              BorderSurface {
+                visible: root.setupError !== ""
+                width: parent.width
+                implicitHeight: reconnectMessage.implicitHeight + Style.space(18)
+                color: root.alpha(root.urgent, 0.09)
+                borderSpec: Border.flat(root.alpha(root.urgent, 0.32), 1)
+                radius: root.compactRadius
+
+                Text {
+                  id: reconnectMessage
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  text: root.setupError
+                  color: root.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  wrapMode: Text.WordWrap
+                }
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: localServerMaintenanceCard
+          visible: root.configured && root.settingsSection === "maintenance"
+          width: parent.width
+          implicitHeight: localServerMaintenanceForm.implicitHeight + Style.space(24)
+          radius: root.panelRadius
+          color: root.alpha(root.accentColor, 0.035)
+          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+
+          Column {
+            id: localServerMaintenanceForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(12)
+            spacing: Style.space(8)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Text {
+                width: Style.space(30)
+                height: Style.space(30)
+                text: "󰒓"
+                color: root.accentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.display
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+              }
+
+              Column {
+                width: parent.width - Style.space(38)
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: "LOCAL HOME ASSISTANT"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+
+                Row {
+                  id: localServerAddressRow
+                  width: parent.width
+                  spacing: Style.space(5)
+
+                  Text {
+                    width: parent.width
+                      - (root.localHomeAssistantConfigured
+                        ? localServerConnectionStatus.implicitWidth : 0)
+                      - (root.localHomeAssistantConfigured ? parent.spacing : 0)
+                    text: root.localHomeAssistantConfigured
+                      ? root.activeHomeAssistantUrl
+                      : (root.localServerReady ? "READY · RECONFIGURE TO USE" : "OPTIONAL · NOT SELECTED")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideMiddle
+                  }
+
+                  ServerStatus {
+                    id: localServerConnectionStatus
+                    visible: root.localHomeAssistantConfigured
+                    connected: root.localHomeAssistantConnected
+                    pingMs: root.localHomeAssistantConfigured ? root.homeAssistantPingMs : -1
+                    offlineText: root.localHomeAssistantConfigured ? "OFFLINE" : "NOT ACTIVE"
+                    foreground: root.foreground
+                    urgentColor: root.urgent
+                    fontFamily: root.fontFamily
+                  }
+                }
+              }
+            }
+
+            Button {
+              id: localServerDetailsToggle
+              width: parent.width
+              height: Style.space(38)
+              text: root.localServerExpanded
+                ? "HIDE LOCAL SERVER SETUP"
+                : (root.localHomeAssistantConfigured ? "LOCAL SERVER OPTIONS" : "SET UP LOCALLY")
+              iconText: root.localServerExpanded ? "↑" : "󰒓"
+              iconSize: Style.font.body
+              fontSize: Style.font.bodySmall
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              background: root.alpha(root.foreground, 0.025)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.localServerBusy && !root.setupBusy && !root.preferenceBusy
+              onClicked: root.localServerExpanded = !root.localServerExpanded
+            }
+
+            Column {
+              id: localServerMaintenanceDetails
+              visible: root.localServerExpanded || height > 0.5
+              width: parent.width
+              height: root.localServerExpanded ? implicitHeight : 0
+              opacity: root.localServerExpanded ? 1 : 0
+              clip: true
+              spacing: Style.space(7)
+
+              Behavior on height {
+                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+              }
+              Behavior on opacity {
+                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+              }
+
+              BorderSurface {
+                width: parent.width
+                implicitHeight: localServerMaintenanceDetailsText.implicitHeight + Style.space(18)
+                color: root.alpha(root.foreground, 0.025)
+                borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+                radius: root.compactRadius
+
+                Text {
+                  id: localServerMaintenanceDetailsText
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  text: "Optional official Home Assistant Container on this PC. Docker may ask for administrator approval; data stays in ~/.local/share/omarchy/homeassistant. Your current connection is unchanged until you reconfigure above."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                CriticalActionSplit {
+                  id: localServerMaintenanceAction
+                  width: parent.width - localServerMaintenanceGuide.width - parent.spacing
+                  height: Style.space(38)
+                  idleText: root.localServerReady || root.localHomeAssistantConfigured
+                    ? "OPEN HOME ASSISTANT" : "SET UP LOCALLY"
+                  busyText: "SETTING UP…"
+                  confirmText: "RUN SETUP"
+                  idleIcon: root.localServerReady || root.localHomeAssistantConfigured ? "↗" : "󰒓"
+                  idleTooltip: root.localServerReady || root.localHomeAssistantConfigured
+                    ? "Open the local Home Assistant server"
+                    : "Prepare the local Home Assistant setup"
+                  confirmTooltip: "Run the local Home Assistant setup script"
+                  backTooltip: "Cancel local Home Assistant setup"
+                  actionColor: root.accentColor
+                  actionTextColor: Color.popups.background
+                  idleBackground: root.alpha(root.accentColor, 0.07)
+                  backTextColor: root.foreground
+                  backBackground: root.alpha(root.foreground, 0.025)
+                  controlRadius: root.compactRadius
+                  fontFamily: root.fontFamily
+                  confirming: root.localServerConfirming
+                  busy: root.localServerBusy
+                  actionEnabled: !root.localServerBusy && !root.setupBusy && !root.preferenceBusy
+                  onActionRequested: root.localServerReady || root.localHomeAssistantConfigured
+                    ? root.openLocalServer() : root.requestLocalServerSetup()
+                  onBackRequested: root.cancelLocalServerSetup()
+                }
+
+                Button {
+                  id: localServerMaintenanceGuide
+                  width: Style.space(96)
+                  height: Style.space(38)
+                  text: "GUIDE"
+                  fontSize: Style.font.caption
+                  fontFamily: root.fontFamily
+                  foreground: root.foreground
+                  accent: root.controlAccentColor
+                  background: root.alpha(root.foreground, 0.025)
+                  bordered: true
+                  radius: root.compactRadius
+                  tooltipText: root.homeAssistantLinuxGuideUrl
+                  enabled: !root.localServerBusy && !root.localServerConfirming
+                  onClicked: Qt.openUrlExternally(root.homeAssistantLinuxGuideUrl)
+                }
+              }
+
+              BorderSurface {
+                readonly property bool hasLocalServerMaintenanceStatus: root.localServerMessage !== ""
+                  || root.localServerError !== ""
+                visible: hasLocalServerMaintenanceStatus || height > 0.5
+                width: parent.width
+                implicitHeight: localServerMaintenanceStatus.implicitHeight + Style.space(18)
+                height: hasLocalServerMaintenanceStatus ? implicitHeight : 0
+                opacity: hasLocalServerMaintenanceStatus ? 1 : 0
+                clip: true
+                color: root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.09)
+                borderSpec: Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.32), 1)
+                radius: root.compactRadius
+
+                Behavior on height {
+                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                }
+                Behavior on opacity {
+                  NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                }
+
+                Text {
+                  id: localServerMaintenanceStatus
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  text: root.localServerError !== ""
+                    ? root.localServerError : root.localServerMessage
+                  color: root.localServerError !== "" ? root.urgent : root.accentColor
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  wrapMode: Text.WordWrap
+                }
               }
             }
           }
@@ -5194,7 +6308,7 @@ Panel {
               fontSize: Style.font.bodySmall
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.accentColor
+              accent: root.controlAccentColor
               background: root.alpha(root.accentColor, 0.09)
               bordered: true
               radius: root.compactRadius
@@ -5484,7 +6598,7 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: "UNINSTALL PLUGIN"
+                  text: "UNINSTALL"
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -5996,7 +7110,7 @@ Panel {
                 iconSize: Style.font.body
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.035)
                 bordered: true
                 radius: root.compactRadius
@@ -6021,7 +7135,7 @@ Panel {
           foreground: root.foreground
           background: Color.popups.background
           popupBorder: Color.popups.border
-          accent: root.accentColor
+          accent: root.controlAccentColor
           fontFamily: root.fontFamily
           controlRadius: root.compactRadius
           onChanged: function(value) { root.chooseEntity(value) }
@@ -6048,12 +7162,13 @@ Panel {
 
             BorderSurface {
               required property var modelData
+              readonly property color cardAccent: root.deviceCardAccent(String(modelData))
               width: selectedUnitsSection.width
               height: Style.space(32)
               radius: root.compactRadius
-              color: root.alpha(root.accentColor, String(modelData) === root.selectedEntity ? 0.12 : 0.045)
+              color: root.alpha(cardAccent, String(modelData) === root.selectedEntity ? 0.12 : 0.045)
               borderSpec: Border.flat(root.alpha(
-                root.accentColor, String(modelData) === root.selectedEntity ? 0.36 : 0.18), 1)
+                cardAccent, String(modelData) === root.selectedEntity ? 0.36 : 0.18), 1)
 
               Row {
                 anchors.fill: parent
@@ -6065,7 +7180,7 @@ Panel {
                   width: parent.width - removeSelectedUnitButton.width - parent.spacing
                   height: parent.height
                   text: root.entityDisplayName(modelData)
-                  color: String(modelData) === root.selectedEntity ? root.accentColor : root.foreground
+                  color: String(modelData) === root.selectedEntity ? parent.parent.cardAccent : root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: String(modelData) === root.selectedEntity
@@ -6084,7 +7199,7 @@ Panel {
                   verticalPadding: 0
                   fontFamily: root.fontFamily
                   foreground: root.foreground
-                  accent: root.accentColor
+                  accent: parent.parent.cardAccent
                   background: root.alpha(root.foreground, 0.035)
                   bordered: true
                   radius: width / 2
@@ -6115,7 +7230,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.advancedControls
+            text: root.showClimateControls
               ? "Each selected air conditioner has its own remote."
               : "Climate controls are hidden; each AC keeps its own power button."
             color: root.dim
@@ -6143,8 +7258,9 @@ Panel {
                   return root.unitLocalState(String(modelData))
                 }
                 powerCancelEnabled: root.connected && !root.masterSwitchBusy
-                showClimateControls: root.advancedControls
-                accent: root.accentColor
+                showClimateControls: root.showClimateControls
+                accent: root.deviceControlAccent(String(modelData))
+                cardAccent: root.deviceCardAccent(String(modelData))
                 foreground: root.foreground
                 dim: root.dim
                 fontFamily: root.fontFamily
@@ -6235,32 +7351,37 @@ Panel {
             radius: root.panelRadius
             color: root.alpha(root.foreground, 0.035)
             gradient: Gradient {
-              GradientStop { position: 0.0; color: root.alpha(root.foreground, 0.075) }
+              GradientStop { position: 0.0; color: root.alpha(root.ambientTemperatureTint, 0.075) }
+              GradientStop { position: 0.56; color: root.alpha(root.ambientTemperatureTint, 0.032) }
               GradientStop { position: 1.0; color: root.alpha(root.foreground, 0.018) }
             }
             borderSpec: Border.flat(root.alpha(root.foreground, 0.16), 1)
 
             Column {
               anchors.centerIn: parent
+              width: parent.width - Style.space(16)
               spacing: Style.space(5)
 
               Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: root.multiUnitActive ? "AVG AMBIENT" : "AMBIENT"
+                width: parent.width
+                text: "AMBIENT"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 font.letterSpacing: 1.0
+                horizontalAlignment: Text.AlignHCenter
               }
 
               Text {
-                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
                 text: root.mainAmbientText
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.displayLarge
+                font.pixelSize: root.temperatureValueFontSize(
+                  root.mainAmbientText, Style.font.displayLarge)
                 font.bold: true
+                horizontalAlignment: Text.AlignHCenter
               }
             }
           }
@@ -6338,7 +7459,7 @@ Panel {
                 enabled: root.isOn && !root.otherActionBusy
                 fontFamily: root.fontFamily
                 foreground: root.isOn ? root.accentColor : root.dim
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
                 bordered: true
                 tooltipText: "Lower target temperature"
@@ -6366,7 +7487,8 @@ Panel {
                   text: root.isOn ? root.targetText : "OFF"
                   color: root.isOn ? (root.hasLocalTarget ? root.accentColor : root.foreground) : root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.displayLarge
+                  font.pixelSize: root.temperatureValueFontSize(
+                    root.targetText, Style.font.displayLarge)
                   font.bold: true
                 }
               }
@@ -6383,7 +7505,7 @@ Panel {
                 enabled: root.isOn && !root.otherActionBusy
                 fontFamily: root.fontFamily
                 foreground: root.isOn ? root.accentColor : root.dim
-                accent: root.accentColor
+                accent: root.controlAccentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
                 bordered: true
                 tooltipText: "Raise target temperature"
@@ -6411,17 +7533,19 @@ Panel {
               anchors.rightMargin: Style.space(14)
               anchors.bottomMargin: Style.space(6)
               height: Style.space(14)
-              value: isFinite(Number(root.targetValue)) ? Number(root.targetValue) : root.minimumTemperature
-              minimum: root.minimumTemperature
-              maximum: root.maximumTemperature
-              step: root.temperatureStep
+              value: isFinite(Number(root.targetValue))
+                ? root.convertTemperature(root.targetValue, root.unit, root.displayTemperatureUnitCode)
+                : root.displayMinimumTemperature
+              minimum: root.displayMinimumTemperature
+              maximum: root.displayMaximumTemperature
+              step: root.displayTemperatureStep
               integer: false
               bar: root.bar
               trackHeight: Style.space(3)
               knobSize: Style.space(12)
-              trackColor: root.alpha(root.accentColor, 0.22)
-              fillColor: root.accentColor
-              knobColor: root.accentColor
+              trackColor: root.alpha(root.controlAccentColor, 0.22)
+              fillColor: root.controlAccentColor
+              knobColor: root.controlAccentColor
               tickCount: 3
               tickColor: root.alpha(Color.popups.background, 0.82)
               onMoved: function(value) { root.previewTarget(value) }
@@ -6459,7 +7583,7 @@ Panel {
             actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
             cancelEnabled: root.connected && !root.masterSwitchBusy
             foreground: root.foreground
-            accent: root.accentColor
+            accent: root.controlAccentColor
             fontFamily: root.fontFamily
             panelRadius: root.compactRadius
             onPowerRequested: root.togglePower()
@@ -6493,6 +7617,7 @@ Panel {
                 readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
                 readonly property bool actualIsOn: connected
                   && String(climate.state || "").toLowerCase() !== "off"
+                readonly property color cardAccent: root.deviceCardAccent(entityId)
 
                 width: Math.max(
                   Style.space(160),
@@ -6502,9 +7627,9 @@ Panel {
                 BorderSurface {
                   anchors.fill: parent
                   radius: root.compactRadius
-                  color: root.alpha(root.accentColor,
+                  color: root.alpha(parent.cardAccent,
                     parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.075 : 0.035)
-                  borderSpec: Border.flat(root.alpha(root.accentColor,
+                  borderSpec: Border.flat(root.alpha(parent.cardAccent,
                     parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.30 : 0.14), 1)
 
                   Column {
@@ -6520,7 +7645,7 @@ Panel {
                         width: Math.max(0,
                           parent.width - splitPowerAmbientText.implicitWidth - parent.spacing)
                         text: root.entityDisplayName(splitPowerCard.entityId)
-                        color: root.foreground
+                        color: splitPowerCard.cardAccent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                         font.bold: true
@@ -6554,7 +7679,7 @@ Panel {
                       actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
                       cancelEnabled: root.connected && !root.masterSwitchBusy
                       foreground: root.foreground
-                      accent: root.accentColor
+                      accent: root.deviceControlAccent(splitPowerCard.entityId)
                       fontFamily: root.fontFamily
                       panelRadius: root.compactRadius
                       onPowerRequested: function(value) {
@@ -6573,12 +7698,12 @@ Panel {
         Column {
           id: advancedClimateSection
           width: parent.width
-          visible: (root.showMainRemote && root.advancedControlsVisible) || height > 0.5
-          height: root.showMainRemote && root.advancedControlsVisible ? implicitHeight : 0
-          enabled: root.showMainRemote && root.advancedControlsVisible
+          visible: (root.showMainRemote && root.climateControlsVisible) || height > 0.5
+          height: root.showMainRemote && root.climateControlsVisible ? implicitHeight : 0
+          enabled: root.showMainRemote && root.climateControlsVisible
           clip: true
           spacing: Style.space(8)
-          opacity: root.showMainRemote && root.advancedControlsVisible ? 1 : 0
+          opacity: root.showMainRemote && root.climateControlsVisible ? 1 : 0
 
           Behavior on height {
             NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
@@ -6656,7 +7781,7 @@ Panel {
                   foreground: root.foreground
                   background: Color.popups.background
                   popupBorder: Color.popups.border
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
                   enabled: root.connected && (root.isOn || root.localMode !== "")
@@ -6676,7 +7801,7 @@ Panel {
                   foreground: root.foreground
                   background: Color.popups.background
                   popupBorder: Color.popups.border
-                  accent: root.accentColor
+                  accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
                   enabled: root.connected && root.isOn && !root.actionBusy && !root.masterSwitchBusy
@@ -6841,16 +7966,16 @@ Panel {
           clip: true
           points: root.historyPoints
           rangeHours: root.historyHours
-          pingMs: root.historyPingMs
-          unit: root.unit
+          unit: root.displayTemperatureUnit
           connected: root.connected
           sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
-          accent: root.accentColor
+          accent: root.controlAccentColor
           background: root.alpha(root.foreground, 0.035)
           borderColor: root.alpha(root.foreground, 0.14)
           fontFamily: root.fontFamily
+          panelRadius: root.uiRadius
 
           Behavior on height {
             NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }

@@ -10,11 +10,17 @@ from unittest.mock import patch
 
 
 HELPER = Path(__file__).resolve().parents[1] / "omarchy-homeassistant-ac"
+LOGGER = Path(__file__).resolve().parents[1] / "remote-history-logger.py"
 loader = SourceFileLoader("ha_helper", str(HELPER))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec and spec.loader
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
+logger_loader = SourceFileLoader("ha_remote_history_logger", str(LOGGER))
+logger_spec = importlib.util.spec_from_loader(logger_loader.name, logger_loader)
+assert logger_spec and logger_spec.loader
+logger = importlib.util.module_from_spec(logger_spec)
+logger_spec.loader.exec_module(logger)
 
 
 class FakeResponse:
@@ -274,6 +280,263 @@ class HelperTests(unittest.TestCase):
             finally:
                 helper.CONFIG_PATH = original_path
 
+    def test_average_temperature_decimals_is_off_by_default_and_persistable(self):
+        self.assertFalse(helper.experimental_settings({})["average_temperature_decimals"])
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        {
+                            "url": "http://ha.local:8123",
+                            "token": "test-secret",
+                            "entity_id": "climate.office",
+                        },
+                        "average_temperature_decimals",
+                        "on",
+                    )
+                self.assertEqual(result, 0)
+                self.assertTrue(json.loads(output.getvalue())["value"])
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertTrue(saved["average_temperature_decimals"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_temperature_units_support_fahrenheit_and_gated_kelvin(self):
+        defaults = helper.experimental_settings({})
+        self.assertEqual(defaults["temperature_unit"], "source")
+        self.assertFalse(defaults["experimental_kelvin_enabled"])
+
+        blocked_output = io.StringIO()
+        with contextlib.redirect_stdout(blocked_output):
+            result = helper.set_preference(
+                {"url": "http://ha.local:8123", "token": "test-secret"},
+                "temperature_unit",
+                "kelvin",
+            )
+        self.assertEqual(result, 1)
+        self.assertIn("Kelvin", json.loads(blocked_output.getvalue())["error"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                config = {
+                    "url": "http://ha.local:8123",
+                    "token": "test-secret",
+                    "entity_id": "climate.office",
+                    "experimental_kelvin_enabled": True,
+                }
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(config, "temperature_unit", "fahrenheit")
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue())["value"], "fahrenheit")
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(config, "temperature_unit", "kelvin")
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue())["value"], "kelvin")
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(config, "experimental_kelvin_enabled", "off")
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertFalse(parsed["value"])
+                self.assertEqual(parsed["temperature_unit"], "source")
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["temperature_unit"], "source")
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_reset_appearance_restores_defaults_without_disabling_customisations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        {
+                            "url": "http://ha.local:8123",
+                            "token": "test-secret",
+                            "custom_appearance_enabled": True,
+                            "appearance_auto_accent": False,
+                            "appearance_accent": "#C89AAB",
+                            "appearance_control": "#8EA7C7",
+                            "appearance_device_colors_enabled": True,
+                            "appearance_device_colors": {"climate.office": "#C89AAB"},
+                            "appearance_transparency": 45,
+                            "appearance_blur": 18,
+                            "appearance_radius": 30,
+                        },
+                        "reset_appearance",
+                        "default",
+                    )
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertTrue(parsed["appearance_reset"])
+                self.assertTrue(parsed["custom_appearance_enabled"])
+                self.assertTrue(parsed["appearance_auto_accent"])
+                self.assertEqual(parsed["appearance_accent"], helper.DEFAULT_APPEARANCE_ACCENT)
+                self.assertEqual(parsed["appearance_control"], helper.DEFAULT_APPEARANCE_CONTROL)
+                self.assertFalse(parsed["appearance_device_colors_enabled"])
+                self.assertEqual(parsed["appearance_device_colors"], {})
+                self.assertEqual(parsed["appearance_transparency"], 0)
+                self.assertEqual(parsed["appearance_blur"], 0)
+                self.assertEqual(parsed["appearance_radius"], helper.DEFAULT_APPEARANCE_RADIUS)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertTrue(saved["custom_appearance_enabled"])
+                self.assertTrue(saved["appearance_auto_accent"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_appearance_transparency_accepts_the_full_range(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        {
+                            "url": "http://ha.local:8123",
+                            "token": "test-secret",
+                            "custom_appearance_enabled": True,
+                        },
+                        "appearance_transparency",
+                        "100",
+                    )
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertEqual(parsed["value"], 100)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["appearance_transparency"], 100)
+                self.assertEqual(
+                    helper.experimental_settings({"appearance_transparency": 101})[
+                        "appearance_transparency"
+                    ],
+                    100,
+                )
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_appearance_control_and_device_colours_are_saved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            config = {
+                "url": "http://ha.local:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+                "selected_entities": ["climate.office", "climate.bedroom"],
+                "custom_appearance_enabled": True,
+                "appearance_auto_accent": False,
+            }
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(config, "appearance_control", "#C89AAB")
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue())["value"], "#C89AAB")
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "appearance_device_colors_enabled", "on"
+                    )
+                self.assertEqual(result, 0)
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config,
+                        "appearance_device_colors",
+                        json.dumps({
+                            "climate.office": "#8EA7C7",
+                            "climate.bedroom": "#D0A66A",
+                            "sensor.outside": "#FFFFFF",
+                        }),
+                    )
+                self.assertEqual(result, 0)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["appearance_control"], "#C89AAB")
+                self.assertTrue(saved["appearance_device_colors_enabled"])
+                self.assertEqual(saved["appearance_device_colors"], {
+                    "climate.office": "#8EA7C7",
+                    "climate.bedroom": "#D0A66A",
+                })
+                settings = helper.experimental_settings(saved)
+                self.assertEqual(settings["appearance_control"], "#C89AAB")
+                self.assertEqual(settings["appearance_device_colors"]["climate.office"], "#8EA7C7")
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_external_logger_discovers_all_available_climate_entities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_config_path = logger.CONFIG_PATH
+            original_history_path = logger.HISTORY_PATH
+            original_urlopen = logger.urlopen
+            original_time = logger.time.time
+            logger.CONFIG_PATH = Path(directory) / "config" / "homeassistant-ac-history.json"
+            logger.HISTORY_PATH = Path(directory) / "state" / "temperature.json"
+            logger.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            logger.CONFIG_PATH.write_text(json.dumps({
+                "url": "http://ha.local:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+                "history_path": str(logger.HISTORY_PATH),
+            }), encoding="utf-8")
+            states = [
+                {
+                    "entity_id": "climate.office",
+                    "state": "cool",
+                    "attributes": {"current_temperature": 24, "temperature_unit": "C"},
+                },
+                {
+                    "entity_id": "climate.bedroom",
+                    "state": "off",
+                    "attributes": {"current_temperature": 27, "temperature_unit": "C"},
+                },
+                {
+                    "entity_id": "climate.guest",
+                    "state": "unavailable",
+                    "attributes": {"current_temperature": 22, "temperature_unit": "C"},
+                },
+                {
+                    "entity_id": "sensor.outside",
+                    "state": "25",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+            ]
+            requests = []
+
+            def fake_urlopen(request, timeout):
+                requests.append((request.full_url, timeout, request.headers.get("Authorization")))
+                return FakeResponse(states)
+
+            logger.urlopen = fake_urlopen
+            logger.time.time = lambda: 2_000_000_000
+            try:
+                logger.record_once()
+                history = logger.load_history(logger.HISTORY_PATH)
+                self.assertEqual(set(history), {"climate.office", "climate.bedroom"})
+                self.assertEqual(history["climate.office"][0]["temperature"], 24)
+                self.assertEqual(history["climate.bedroom"][0]["temperature"], 27)
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(requests[0][0], "http://ha.local:8123/api/states")
+                self.assertEqual(requests[0][2], "Bearer test-secret")
+                self.assertTrue(logger.record_all_entities_enabled(None))
+            finally:
+                logger.CONFIG_PATH = original_config_path
+                logger.HISTORY_PATH = original_history_path
+                logger.urlopen = original_urlopen
+                logger.time.time = original_time
+
     def test_server_status_uses_remote_history_without_writing_local_history(self):
         state = {
             "entity_id": "climate.office",
@@ -363,6 +626,7 @@ class HelperTests(unittest.TestCase):
                     json.loads(remote_config)["entity_ids"],
                     ["climate.office", "climate.living_room"],
                 )
+                self.assertTrue(json.loads(remote_config)["record_all_entities"])
                 self.assertEqual(json.loads(remote_config)["retention_hours"], 744)
                 saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
                 self.assertEqual(saved["history_source"], "server")
@@ -389,6 +653,8 @@ class HelperTests(unittest.TestCase):
 
         guide = (HELPER.parent / "EXTERNAL_SERVER_HISTORY.md").read_text(encoding="utf-8")
         self.assertIn("external server must be the same host", guide)
+        self.assertIn("record_all_entities", guide)
+        self.assertIn("every available", guide)
         self.assertIn("COPY SOURCE", guide)
         self.assertIn("ssh-copy-id", guide)
 
@@ -422,6 +688,58 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("NO TELEMETRY LOGGING", panel)
         self.assertNotIn("COPY GUIDE", panel)
         self.assertIn("EXTERNAL_SERVER_HISTORY.md", panel)
+
+    def test_dropdown_trigger_toggles_using_visible_popup_state(self):
+        dropdown = (HELPER.parent / "AcDropdown.qml").read_text(encoding="utf-8")
+        self.assertIn("readonly property bool popupOpen: popup.visible", dropdown)
+        self.assertIn("function toggle() { popup.visible ? popup.close() : popup.open() }", dropdown)
+        self.assertNotIn("popup.opened ? popup.close() : popup.open()", dropdown)
+
+    def test_multi_ac_ambient_card_keeps_the_standard_label(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn('text: "AMBIENT"', panel)
+        self.assertNotIn('text: root.multiUnitActive ? "AVG AMBIENT" : "AMBIENT"', panel)
+        self.assertIn("width: parent.width - Style.space(16)", panel)
+        self.assertIn("horizontalAlignment: Text.AlignHCenter", panel)
+        self.assertIn("readonly property color ambientTemperatureTint", panel)
+        self.assertIn("root.alpha(root.ambientTemperatureTint, 0.075)", panel)
+        self.assertIn("root.mixTemperatureColors(green, amber", panel)
+        self.assertNotIn("if (!connected || !isFinite(parsed)) return root.foreground", panel)
+        self.assertIn("if (!isFinite(parsed)) return root.foreground", panel)
+        self.assertIn('text: "EXPERIMENTAL · Optional extras; some details may be less polished."', panel)
+
+    def test_temperature_units_and_chart_gradient_are_wired(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        chart = (HELPER.parent / "TemperatureHistoryChart.qml").read_text(encoding="utf-8")
+        self.assertIn('text: "TEMPERATURE UNIT"', panel)
+        self.assertIn('{ value: "celsius", label: "CELSIUS" }', panel)
+        self.assertIn('{ value: "fahrenheit", label: "FAHRENHEIT" }', panel)
+        self.assertIn('{ value: "kelvin", label: "KELVIN" }', panel)
+        self.assertIn('label: "Kelvin option"', panel)
+        self.assertIn('text: "EXTRA CUSTOMISATIONS"', panel)
+        self.assertIn('label: "Extra customisations"', panel)
+        self.assertIn("property bool showClimateControls: true", panel)
+        self.assertIn("showClimateControls: root.showClimateControls", panel)
+        self.assertIn("root.setShowClimateControlsEnabled(!root.showClimateControls)", panel)
+        self.assertIn('visible: root.customAppearanceEnabled', panel)
+        self.assertIn('label: "Auto · Omarchy accent"', panel)
+        self.assertIn('"RESET CUSTOMISATIONS"', panel)
+        self.assertIn('label: "SWITCH & SLIDER COLOUR"', panel)
+        self.assertIn('label: "Per-device colours"', panel)
+        self.assertIn("AppearanceColorRow", panel)
+        self.assertIn("appearance_device_colors_enabled", panel)
+        self.assertIn("controlAccentColor", panel)
+        self.assertIn("readonly property real uiRadius", panel)
+        self.assertIn("readonly property real panelRadius: uiRadius", panel)
+        self.assertIn("readonly property real nestedRadius: uiRadius", panel)
+        self.assertIn("readonly property real compactRadius: uiRadius", panel)
+        self.assertIn("panelRadius: root.uiRadius", panel)
+        self.assertIn("maximum: 100", panel)
+        self.assertIn("temperatureValueFontSize(", panel)
+        self.assertIn("function temperatureCelsius(value)", chart)
+        self.assertIn("function addTemperatureGradientStops", chart)
+        self.assertIn("root.addTemperatureGradientStops(lineGradient", chart)
+        self.assertIn("33, 35", chart)
 
     def test_remote_history_path_is_written_to_the_logger_config(self):
         with tempfile.TemporaryDirectory() as directory:

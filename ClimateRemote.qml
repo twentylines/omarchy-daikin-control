@@ -13,6 +13,7 @@ Item {
   property color foreground: Color.foreground
   property color dim: Qt.darker(foreground, 1.55)
   property color accent: Color.accent
+  property color cardAccent: accent
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
   property bool powerCancelEnabled: true
@@ -97,8 +98,8 @@ Item {
     width: parent.width
     implicitHeight: remoteForm.implicitHeight + Style.space(24)
     radius: root.panelRadius
-    color: root.alpha(root.accent, root.isOn ? 0.075 : 0.035)
-    borderSpec: Border.flat(root.alpha(root.accent, root.isOn ? 0.30 : 0.14), 1)
+    color: root.alpha(root.cardAccent, root.isOn ? 0.075 : 0.035)
+    borderSpec: Border.flat(root.alpha(root.cardAccent, root.isOn ? 0.30 : 0.14), 1)
 
     Column {
       id: remoteForm

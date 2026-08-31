@@ -37,6 +37,7 @@ MAX_SELECTED_ENTITIES = 12
 CLIMATE_ENTITY_PATTERN = re.compile(r"^climate\.[A-Za-z0-9_-]+$")
 APPEARANCE_HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 DEFAULT_APPEARANCE_ACCENT = "#8FA79F"
+DEFAULT_APPEARANCE_CONTROL = "#8FA79F"
 DEFAULT_APPEARANCE_TRANSPARENCY = 0
 DEFAULT_APPEARANCE_BLUR = 0
 DEFAULT_APPEARANCE_RADIUS = 16
@@ -90,6 +91,11 @@ def preference_enabled(value: Any) -> bool:
 def temperature_display(value: Any) -> str:
     text = str(value or "").strip().lower()
     return text if text in {"ambient", "target", "both"} else "both"
+
+
+def temperature_unit_preference(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"source", "celsius", "fahrenheit", "kelvin"} else "source"
 
 
 def history_hours(value: Any) -> float:
@@ -160,6 +166,32 @@ def appearance_hex(value: Any) -> str:
     return text.upper() if APPEARANCE_HEX_PATTERN.fullmatch(text) else DEFAULT_APPEARANCE_ACCENT
 
 
+def appearance_color_map(value: Any) -> dict[str, str]:
+    """Keep per-device colours limited to valid Home Assistant climate IDs."""
+    raw: Any = value
+    if isinstance(value, str):
+        try:
+            raw = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, str] = {}
+    for entity_id, color in raw.items():
+        normalized_id = climate_entity_id(entity_id)
+        normalized_color = str(color or "").strip()
+        if (
+            not normalized_id
+            or not APPEARANCE_HEX_PATTERN.fullmatch(normalized_color)
+            or normalized_id in result
+        ):
+            continue
+        result[normalized_id] = normalized_color.upper()
+        if len(result) >= MAX_SELECTED_ENTITIES:
+            break
+    return result
+
+
 def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
     selected = selected_entity_ids(config.get("selected_entities"), config.get("entity_id"))
     display_entities = selected_entity_ids(config.get("bar_temperature_entities"), selected)
@@ -170,15 +202,39 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         "sync_non_power_controls": preference_enabled(
             config.get("sync_non_power_controls", True)
         ),
+        "average_temperature_decimals": preference_enabled(
+            config.get("average_temperature_decimals", False)
+        ),
+        "temperature_unit": (
+            "source"
+            if temperature_unit_preference(config.get("temperature_unit")) == "kelvin"
+            and not preference_enabled(config.get("experimental_kelvin_enabled"))
+            else temperature_unit_preference(config.get("temperature_unit"))
+        ),
+        "experimental_kelvin_enabled": preference_enabled(
+            config.get("experimental_kelvin_enabled", False)
+        ),
         "selected_entities": selected,
         "bar_temperature_mode": bar_temperature_mode(config.get("bar_temperature_mode")),
         "bar_temperature_entity": single_entity,
         "bar_temperature_entities": display_entities,
         "experimental_history_enabled": preference_enabled(config.get("experimental_history_enabled")),
         "custom_appearance_enabled": preference_enabled(config.get("custom_appearance_enabled")),
+        "appearance_auto_accent": preference_enabled(
+            config.get("appearance_auto_accent", True)
+        ),
         "appearance_accent": appearance_hex(config.get("appearance_accent")),
+        "appearance_control": appearance_hex(
+            config.get("appearance_control") or DEFAULT_APPEARANCE_CONTROL
+        ),
+        "appearance_device_colors_enabled": preference_enabled(
+            config.get("appearance_device_colors_enabled", False)
+        ),
+        "appearance_device_colors": appearance_color_map(
+            config.get("appearance_device_colors")
+        ),
         "appearance_transparency": bounded_preference(
-            config.get("appearance_transparency"), 0, 70, DEFAULT_APPEARANCE_TRANSPARENCY
+            config.get("appearance_transparency"), 0, 100, DEFAULT_APPEARANCE_TRANSPARENCY
         ),
         "appearance_blur": bounded_preference(
             config.get("appearance_blur"), 0, 24, DEFAULT_APPEARANCE_BLUR
@@ -631,6 +687,7 @@ chmod 700 "$HOME/.local/bin/install-omarchy-homeassistant-ac-history.sh"
         "token": token,
         "entity_id": entity_id,
         "entity_ids": entity_ids,
+        "record_all_entities": True,
         "interval_seconds": 60,
         "history_path": path,
         "retention_hours": MAX_HISTORY_HOURS,
@@ -681,7 +738,7 @@ exec "$HOME/.local/bin/install-omarchy-homeassistant-ac-history.sh"
         "history_remote_url": remote_url,
         "history_remote_path": path,
         "selected_entities": entity_ids,
-        "message": "External server timer installed. It records while the Home Assistant host is on.",
+        "message": "External server timer installed. It discovers every available climate entity while the Home Assistant host is on.",
     })
 
 
@@ -999,13 +1056,22 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "multi_unit_enabled": previous_experimental["multi_unit_enabled"],
         "global_sync_controls": previous_experimental["global_sync_controls"],
         "sync_non_power_controls": previous_experimental["sync_non_power_controls"],
+        "average_temperature_decimals": previous_experimental["average_temperature_decimals"],
+        "temperature_unit": previous_experimental["temperature_unit"],
+        "experimental_kelvin_enabled": previous_experimental["experimental_kelvin_enabled"],
         "selected_entities": selected_ids,
         "bar_temperature_mode": previous_experimental["bar_temperature_mode"],
         "bar_temperature_entity": previous_experimental["bar_temperature_entity"],
         "bar_temperature_entities": previous_experimental["bar_temperature_entities"],
         "experimental_history_enabled": previous_experimental["experimental_history_enabled"],
         "custom_appearance_enabled": previous_experimental["custom_appearance_enabled"],
+        "appearance_auto_accent": previous_experimental["appearance_auto_accent"],
         "appearance_accent": previous_experimental["appearance_accent"],
+        "appearance_control": previous_experimental["appearance_control"],
+        "appearance_device_colors_enabled": previous_experimental[
+            "appearance_device_colors_enabled"
+        ],
+        "appearance_device_colors": previous_experimental["appearance_device_colors"],
         "appearance_transparency": previous_experimental["appearance_transparency"],
         "appearance_blur": previous_experimental["appearance_blur"],
         "appearance_radius": previous_experimental["appearance_radius"],
@@ -1430,14 +1496,37 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             return fail("Temperature history source must be local or server")
         value = value_text.lower()
         config[name] = value
+    elif name == "reset_appearance":
+        value = True
+        config["appearance_auto_accent"] = True
+        config["appearance_accent"] = DEFAULT_APPEARANCE_ACCENT
+        config["appearance_control"] = DEFAULT_APPEARANCE_CONTROL
+        config["appearance_device_colors_enabled"] = False
+        config["appearance_device_colors"] = {}
+        config["appearance_transparency"] = DEFAULT_APPEARANCE_TRANSPARENCY
+        config["appearance_blur"] = DEFAULT_APPEARANCE_BLUR
+        config["appearance_radius"] = DEFAULT_APPEARANCE_RADIUS
+    elif name == "temperature_unit":
+        value = temperature_unit_preference(value_text)
+        if value not in {"celsius", "fahrenheit", "kelvin"}:
+            return fail("Temperature unit must be Celsius, Fahrenheit, or Kelvin")
+        if value == "kelvin" and not preference_enabled(config.get("experimental_kelvin_enabled")):
+            return fail("Enable the Kelvin option in Experimental settings first")
+        config[name] = value
     elif name in {
         "multi_unit_enabled", "global_sync_controls", "sync_non_power_controls",
-        "experimental_history_enabled", "custom_appearance_enabled",
+        "average_temperature_decimals", "experimental_kelvin_enabled",
+        "experimental_history_enabled",
+        "custom_appearance_enabled", "appearance_auto_accent",
+        "appearance_device_colors_enabled",
     }:
         if value_text.lower() not in {"on", "off"}:
             return fail(f"{name.replace('_', ' ').capitalize()} must be on or off")
         value = value_text.lower() == "on"
         config[name] = value
+        if name == "experimental_kelvin_enabled" and not value:
+            if temperature_unit_preference(config.get("temperature_unit")) == "kelvin":
+                config["temperature_unit"] = "source"
         if name == "multi_unit_enabled" and value:
             config["selected_entities"] = selected_entity_ids(
                 config.get("selected_entities"), config.get("entity_id")
@@ -1460,14 +1549,21 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         if not value:
             value = selected_entity_ids(config.get("selected_entities"), config.get("entity_id"))
         config[name] = value
-    elif name in {"appearance_accent", "appearance_transparency", "appearance_blur", "appearance_radius"}:
-        if name == "appearance_accent":
+    elif name in {
+        "appearance_accent", "appearance_control", "appearance_device_colors",
+        "appearance_transparency", "appearance_blur", "appearance_radius",
+    }:
+        if name in {"appearance_accent", "appearance_control"}:
             if not APPEARANCE_HEX_PATTERN.fullmatch(value_text):
-                return fail("Accent color must be a six-digit hex value such as #8FA79F")
+                return fail("Colour must be a six-digit hex value such as #8FA79F")
             value = value_text.upper()
+        elif name == "appearance_device_colors":
+            value = appearance_color_map(value_text)
+            if value_text and not value and value_text not in {"{}", "null"}:
+                return fail("Device colours must be a JSON object of climate IDs and hex colours")
         else:
             limits = {
-                "appearance_transparency": (0, 70),
+                "appearance_transparency": (0, 100),
                 "appearance_blur": (0, 24),
                 "appearance_radius": (8, 32),
             }
@@ -1519,6 +1615,13 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         response["value"] = value
         if name == "experimental_history_enabled":
             response["history_hours"], response["history_custom"] = effective_history_settings(config)
+        if name == "experimental_kelvin_enabled":
+            response["temperature_unit"] = experimental_settings(config)["temperature_unit"]
+        if name == "reset_appearance":
+            response.update({
+                "appearance_reset": True,
+                **experimental_settings(config),
+            })
     return emit(response)
 
 

@@ -2,8 +2,8 @@
 """Record one Home Assistant ambient temperature sample for the AC plugin.
 
 This is a single-purpose, one-shot sampler copied to the external host that
-runs Home Assistant. It performs authenticated GET requests for the selected
-climate states, writes one owner-only JSON file, and exits. It deliberately
+runs Home Assistant. It performs one authenticated read of every currently
+available climate state, writes one owner-only JSON file, and exits. It deliberately
 uses only Python's standard library so it can run on a small Linux server
 without extra packages.
 
@@ -98,6 +98,15 @@ def configured_entity_ids(config: dict[str, object]) -> list[str]:
     return result
 
 
+def record_all_entities_enabled(value: object) -> bool:
+    """Default to discovery so older installs also begin covering every AC."""
+    if isinstance(value, bool):
+        return value
+    return str(value if value is not None else "true").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
 def configured_history_path(value: object) -> Path:
     """Resolve the configured chart path without accepting shell syntax."""
     text = str(value or "").strip() or "~/.local/state/omarchy/homeassistant-ac-temperature.json"
@@ -172,9 +181,9 @@ def prune(history: dict[str, list[dict[str, object]]], now: float) -> dict[str, 
     }
 
 
-def api_state(url: str, token: str, entity_id: str) -> dict[str, object]:
+def api_json(url: str, token: str, path: str) -> object:
     request = Request(
-        url + f"/api/states/{quote(entity_id, safe='')}",
+        url + path,
         headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
         method="GET",
     )
@@ -189,9 +198,32 @@ def api_state(url: str, token: str, entity_id: str) -> dict[str, object]:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Home Assistant returned invalid JSON") from exc
+    return value
+
+
+def api_state(url: str, token: str, entity_id: str) -> dict[str, object]:
+    value = api_json(url, token, f"/api/states/{quote(entity_id, safe='')}")
     if not isinstance(value, dict):
         raise ValueError("Home Assistant returned no climate state")
     return value
+
+
+def available_climate_states(url: str, token: str) -> list[dict[str, object]]:
+    """Discover all available climate entities on every sampling pass."""
+    value = api_json(url, token, "/api/states")
+    if not isinstance(value, list):
+        raise ValueError("Home Assistant returned an invalid state list")
+    result: list[dict[str, object]] = []
+    for state in value:
+        if not isinstance(state, dict):
+            continue
+        entity_id = str(state.get("entity_id") or "").strip()
+        if not CLIMATE_ENTITY_PATTERN.fullmatch(entity_id):
+            continue
+        if str(state.get("state") or "").strip().lower() in {"unknown", "unavailable"}:
+            continue
+        result.append(state)
+    return result
 
 
 def record_once() -> None:
@@ -199,19 +231,35 @@ def record_once() -> None:
     url = normalize_url(config.get("url"))
     token = str(config.get("token") or "").strip()
     history_path = configured_history_path(config.get("history_path"))
-    entity_ids = configured_entity_ids(config)
-    if not token or not entity_ids:
-        raise ValueError("the logger config is missing a token or climate entity")
+    if not token:
+        raise ValueError("the logger config is missing a Home Assistant token")
+
+    all_entities = record_all_entities_enabled(config.get("record_all_entities"))
+    discovered_states: list[dict[str, object]] = []
+    entity_ids: list[str] = []
+    if all_entities:
+        discovered_states = available_climate_states(url, token)
+        if not discovered_states:
+            raise ValueError("no available Home Assistant climate entities were found")
+    else:
+        entity_ids = configured_entity_ids(config)
+        if not entity_ids:
+            raise ValueError("the logger config is missing a climate entity")
 
     now = time.time()
     history = prune(load_history(history_path), now)
     recorded = 0
     errors: list[str] = []
-    for entity_id in entity_ids:
-        try:
-            state = api_state(url, token, entity_id)
-        except ValueError as exc:
-            errors.append(f"{entity_id}: {exc}")
+    states = discovered_states
+    if not all_entities:
+        for entity_id in entity_ids:
+            try:
+                states.append(api_state(url, token, entity_id))
+            except ValueError as exc:
+                errors.append(f"{entity_id}: {exc}")
+    for state in states:
+        entity_id = str(state.get("entity_id") or "").strip()
+        if not CLIMATE_ENTITY_PATTERN.fullmatch(entity_id):
             continue
         attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
         ambient = number(attrs.get("current_temperature"))

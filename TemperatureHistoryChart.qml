@@ -20,13 +20,66 @@ Item {
   property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
   property bool connected: false
-  property real pingMs: -1
   property color liveColor: "#79B889"
 
   implicitHeight: Style.space(248)
   height: implicitHeight
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
+
+  function temperatureCelsius(value) {
+    var number = Number(value)
+    if (!isFinite(number)) return Number.NaN
+    var unitText = String(root.unit || "").trim().toLowerCase()
+    if (unitText === "k" || unitText === "kelvin") return number - 273.15
+    if (unitText === "f" || unitText === "°f" || unitText === "fahrenheit")
+      return (number - 32) * 5 / 9
+    return number
+  }
+
+  function mixTemperatureColors(first, second, amount) {
+    var t = Math.max(0, Math.min(1, Number(amount)))
+    return Qt.rgba(
+      first.r + (second.r - first.r) * t,
+      first.g + (second.g - first.g) * t,
+      first.b + (second.b - first.b) * t,
+      1)
+  }
+
+  function temperatureColor(value) {
+    var celsius = root.temperatureCelsius(value)
+    if (!isFinite(celsius)) return root.accent
+
+    // Keep the chart in the same restrained cool/green/warm language as the
+    // ambient card. Only genuinely hot readings progress to a strong red.
+    var blue = Qt.rgba(0.36, 0.55, 0.66, 1)
+    var green = Qt.rgba(0.46, 0.64, 0.53, 1)
+    var amber = Qt.rgba(0.73, 0.59, 0.40, 1)
+    var warm = Qt.rgba(0.76, 0.45, 0.40, 1)
+    var hot = Qt.rgba(0.84, 0.27, 0.29, 1)
+
+    if (celsius <= 24) return blue
+    if (celsius < 27) return root.mixTemperatureColors(blue, green, (celsius - 24) / 3)
+    if (celsius < 30) return root.mixTemperatureColors(green, amber, (celsius - 27) / 3)
+    if (celsius < 33) return root.mixTemperatureColors(amber, warm, (celsius - 30) / 3)
+    return root.mixTemperatureColors(warm, hot, Math.min(1, (celsius - 33) / 2))
+  }
+
+  function addTemperatureGradientStops(gradient, minimum, maximum, topAlpha, bottomAlpha) {
+    var span = Math.max(0.001, Number(maximum) - Number(minimum))
+    var stops = [Number(minimum), Number(maximum), 24, 27, 30, 33, 35]
+      .filter(function(value) { return value >= minimum && value <= maximum })
+    stops.sort(function(first, second) { return second - first })
+
+    var previous = Number.NaN
+    for (var i = 0; i < stops.length; i++) {
+      if (isFinite(previous) && Math.abs(stops[i] - previous) < 0.001) continue
+      var offset = (Number(maximum) - stops[i]) / span
+      var alphaValue = topAlpha + (bottomAlpha - topAlpha) * offset
+      gradient.addColorStop(offset, root.alpha(root.temperatureColor(stops[i]), alphaValue))
+      previous = stops[i]
+    }
+  }
 
   function numericPoints() {
     var next = []
@@ -73,12 +126,6 @@ Item {
   function latestText() {
     var values = root.numericPoints()
     return values.length > 0 ? root.formatTemperature(values[values.length - 1].temperature) : "NO DATA"
-  }
-
-  function formatPing(value) {
-    var number = Number(value)
-    if (!isFinite(number) || number < 0) return "—"
-    return String(Math.max(0, Math.round(number))) + " MS"
   }
 
   BorderSurface {
@@ -162,15 +209,6 @@ Item {
           }
 
           Text {
-            text: root.connected ? root.formatPing(root.pingMs) : "OFFLINE"
-            color: root.connected ? root.liveColor : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-            font.letterSpacing: 0.8
-          }
-
-          Text {
             text: root.formatHours(root.rangeHours)
             color: root.accent
             font.family: root.fontFamily
@@ -189,7 +227,7 @@ Item {
 
         BorderSurface {
           anchors.fill: parent
-          radius: root.panelRadius - Style.space(4)
+          radius: root.panelRadius
           color: root.alpha(root.foreground, 0.018)
           borderSpec: Border.flat(root.alpha(root.foreground, 0.08), 1)
         }
@@ -319,8 +357,7 @@ Item {
               context.lineTo(lastX, bottom)
               context.closePath()
               var fill = context.createLinearGradient(0, top, 0, bottom)
-              fill.addColorStop(0, root.alpha(root.accent, 0.22))
-              fill.addColorStop(1, root.alpha(root.accent, 0.015))
+              root.addTemperatureGradientStops(fill, minValue, maxValue, 0.20, 0.012)
               context.fillStyle = fill
               context.fill()
 
@@ -328,7 +365,9 @@ Item {
               context.moveTo(firstX, firstY)
               for (var lineIndex = 1; lineIndex < segment.length; lineIndex++)
                 context.lineTo(pointX(segment[lineIndex]), pointY(segment[lineIndex]))
-              context.strokeStyle = root.accent
+              var lineGradient = context.createLinearGradient(0, top, 0, bottom)
+              root.addTemperatureGradientStops(lineGradient, minValue, maxValue, 0.98, 0.98)
+              context.strokeStyle = lineGradient
               context.lineWidth = Style.space(2)
               context.lineJoin = "round"
               context.lineCap = "round"
@@ -350,13 +389,14 @@ Item {
               var latest = visible[visible.length - 1]
               var latestX = pointX(latest)
               var latestY = pointY(latest)
+              var latestColor = root.temperatureColor(latest.temperature)
               context.beginPath()
               context.arc(latestX, latestY, Style.space(4), 0, Math.PI * 2)
-              context.fillStyle = root.accent
+              context.fillStyle = latestColor
               context.fill()
               context.beginPath()
               context.arc(latestX, latestY, Style.space(7), 0, Math.PI * 2)
-              context.strokeStyle = root.alpha(root.accent, 0.28)
+              context.strokeStyle = root.alpha(latestColor, 0.30)
               context.lineWidth = Style.space(2)
               context.stroke()
             }

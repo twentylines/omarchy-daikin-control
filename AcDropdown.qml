@@ -46,10 +46,10 @@ Item {
   // dropdown owns keys (its embedded ListView is active) and suspend its
   // own keyCatcher so j/k inside the popup don't double-drive the panel
   // cursor.
-  readonly property bool popupOpen: popup.opened
+  readonly property bool popupOpen: popup.visible
   function open() { popup.open() }
   function close() { popup.close() }
-  function toggle() { popup.opened ? popup.close() : popup.open() }
+  function toggle() { popup.visible ? popup.close() : popup.open() }
 
   signal changed(string value)
   signal hovered(bool isHovered)
@@ -106,9 +106,9 @@ Item {
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
             || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
-          popup.opened ? popup.close() : popup.open()
+          root.toggle()
           event.accepted = true
-        } else if (event.key === Qt.Key_Escape && popup.opened) {
+        } else if (event.key === Qt.Key_Escape && popup.visible) {
           popup.close(); event.accepted = true
         }
       }
@@ -142,7 +142,7 @@ Item {
         cursorShape: Qt.PointingHandCursor
         onClicked: {
           trigger.forceActiveFocus()
-          popup.opened ? popup.close() : popup.open()
+          root.toggle()
         }
       }
 

@@ -1,8 +1,10 @@
 # External server history
 
-The optional external history logger records the temperature chart on the
-Linux host that runs Home Assistant. That lets the chart continue recording
-while the Omarchy PC sleeps, shuts down, or restarts.
+The optional external history logger records every currently available
+Home Assistant climate temperature once per minute on the Linux host that
+runs Home Assistant. That lets the chart continue recording while the Omarchy
+PC sleeps, shuts down, or restarts, and keeps history ready for any selected
+AC or multi-AC average.
 
 > **Important:** the external server must be the same host that runs Home
 > Assistant. The logger reads Home Assistant through that host's local API; a
@@ -39,10 +41,10 @@ once. This leaves any existing `~/.ssh/id_ed25519` key unchanged:
    password:
 
    ```bash
-   ssh-copy-id -i ~/.ssh/omarchy-homeassistant-ac.pub sai@192.168.0.10
-   ```
+   ssh-copy-id -i ~/.ssh/omarchy-homeassistant-ac.pub user@192.168.1.20
+  ```
 
-   Replace `sai@192.168.0.10` with your server's SSH target if needed. The
+   Replace `user@192.168.1.20` with your server's SSH target if needed. The
    password is used by `ssh-copy-id` only to add the public key to that user's
    `~/.ssh/authorized_keys`; it is never entered into the plugin. The
    password-protected `id_ed25519` key is not used by this feature.
@@ -51,7 +53,7 @@ once. This leaves any existing `~/.ssh/id_ed25519` key unchanged:
 
    ```bash
    ssh -o BatchMode=yes -o IdentitiesOnly=yes \
-     -i ~/.ssh/omarchy-homeassistant-ac sai@192.168.0.10 true
+     -i ~/.ssh/omarchy-homeassistant-ac user@192.168.1.20 true
    ```
 
    If that succeeds, use the same target in the plugin and choose **INSTALL
@@ -83,15 +85,15 @@ repository on the Omarchy PC, copy the two files to the external host:
 
 ```bash
 ssh -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
-  sai@192.168.0.10 'mkdir -p ~/.local/bin ~/.config/omarchy'
+  user@192.168.1.20 'mkdir -p ~/.local/bin ~/.config/omarchy'
 scp -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
   remote-history-logger.py \
-  sai@192.168.0.10:.local/bin/omarchy-homeassistant-ac-history.py
+  user@192.168.1.20:.local/bin/omarchy-homeassistant-ac-history.py
 scp -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
   install-remote-history.sh \
-  sai@192.168.0.10:.local/bin/install-omarchy-homeassistant-ac-history.sh
+  user@192.168.1.20:.local/bin/install-omarchy-homeassistant-ac-history.sh
 ssh -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
-  sai@192.168.0.10 \
+  user@192.168.1.20 \
   'chmod 700 ~/.local/bin/omarchy-homeassistant-ac-history.py \
    ~/.local/bin/install-omarchy-homeassistant-ac-history.sh'
 ```
@@ -115,15 +117,19 @@ path with your values:
   "token": "YOUR_HOME_ASSISTANT_LONG_LIVED_TOKEN",
   "entity_id": "climate.your_entity",
   "entity_ids": ["climate.your_entity"],
+  "record_all_entities": true,
   "interval_seconds": 60,
   "history_path": "~/.local/state/omarchy/homeassistant-ac-temperature.json",
   "retention_hours": 744
 }
 ```
 
-The plugin-generated config includes every selected climate entity in
-`entity_ids`. Add more available `climate.*` IDs to that list only when you
-also want the external logger to record them.
+With `record_all_entities` enabled, the logger discovers every available
+`climate.*` entity from this Home Assistant host on every sample. New units
+are picked up automatically and unavailable units are skipped. The legacy
+`entity_id` and `entity_ids` fields remain for compatibility; set
+`record_all_entities` to `false` only when you intentionally want a fixed,
+manually listed set.
 
 Then run the supplied installer on the external host:
 
@@ -160,12 +166,12 @@ It also creates:
   per minute.
 - The owner-only 31-day JSON history file at the path selected in Preferences.
 
-The logger reads the selected climate states from the local Home Assistant API
+The logger reads all available climate states from the local Home Assistant API
 and writes their chart history. It does not send AC control commands.
 
-If the selected AC list changes, reinstall the timer from the plugin. The
-installer updates the external config with the new `entity_ids` list without
-creating another timer.
+Because discovery runs on every sample, changing the selected AC list does not
+require reinstalling the timer. Reinstall from the plugin when you change the
+Home Assistant URL, token, history path, or logger source.
 
 ## Keep the SSH key
 
@@ -202,7 +208,7 @@ available directly in this repository:
 
 ## Uninstall scopes
 
-The plugin's **Maintenance → Uninstall Plugin** action has three separately
+The plugin's **Maintenance → Uninstall** action has three separately
 confirmed choices:
 
 ### Remove everything
