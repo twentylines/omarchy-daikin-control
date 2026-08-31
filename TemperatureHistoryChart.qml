@@ -89,11 +89,11 @@ Item {
       Row {
         id: historyHeader
         width: parent.width
-        height: historyHeaderColumn.implicitHeight
+        height: Math.max(historyHeaderColumn.implicitHeight, historyStatus.implicitHeight)
 
         Column {
           id: historyHeaderColumn
-          width: parent.width - historyRange.width - Style.space(8)
+          width: parent.width - historyStatus.implicitWidth - Style.space(8)
           spacing: Style.space(2)
 
           Text {
@@ -118,17 +118,61 @@ Item {
           }
         }
 
-        Text {
-          id: historyRange
+        Row {
+          id: historyStatus
           width: implicitWidth
-          text: root.formatHours(root.rangeHours)
-          color: root.accent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          font.letterSpacing: 0.8
-          horizontalAlignment: Text.AlignRight
+          height: implicitHeight
           anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(5)
+
+          Text {
+            text: root.connected ? "LIVE" : "OFFLINE"
+            color: root.connected ? root.liveColor : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 0.8
+          }
+
+          Item {
+            width: Style.space(8)
+            height: width
+            anchors.verticalCenter: parent.verticalCenter
+
+            Rectangle {
+              id: liveIndicatorDot
+              anchors.centerIn: parent
+              width: Style.space(5)
+              height: width
+              radius: width / 2
+              color: root.liveColor
+              opacity: root.connected ? 1 : 0.35
+
+              SequentialAnimation on opacity {
+                running: root.connected
+                loops: Animation.Infinite
+                NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutQuad }
+                NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutQuad }
+              }
+
+              SequentialAnimation on scale {
+                running: root.connected
+                loops: Animation.Infinite
+                NumberAnimation { to: 1.3; duration: 700; easing.type: Easing.InOutQuad }
+                NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutQuad }
+              }
+            }
+          }
+
+          Text {
+            text: root.formatHours(root.rangeHours)
+            color: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 0.8
+            horizontalAlignment: Text.AlignRight
+          }
         }
       }
 
@@ -321,12 +365,12 @@ Item {
               var liveX = left + plotWidth
               var liveY = pointY(({ timestamp: now, temperature: liveTemperature }))
               context.beginPath()
-              context.arc(liveX, liveY, Style.space(5), 0, Math.PI * 2)
+              context.arc(liveX, liveY, Style.space(3), 0, Math.PI * 2)
               context.fillStyle = root.liveColor
               context.fill()
               context.beginPath()
-              context.arc(liveX, liveY, Style.space(9), 0, Math.PI * 2)
-              context.strokeStyle = root.alpha(root.liveColor, 0.34)
+              context.arc(liveX, liveY, Style.space(6), 0, Math.PI * 2)
+              context.strokeStyle = root.alpha(root.liveColor, 0.24)
               context.lineWidth = Style.space(2)
               context.stroke()
             }
