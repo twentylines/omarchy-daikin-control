@@ -1102,6 +1102,7 @@ def status(
 ) -> int:
     active_entity = climate_entity_id(configured_entity)
     selected = configured_entity_ids(config or {}, configured_entity)
+    request_started = time.monotonic()
     if len(selected) > 1:
         states = resolve_states(url, token, selected)
         selected = [str(state.get("entity_id") or "") for state in states]
@@ -1109,6 +1110,7 @@ def status(
         state, resolved_ids = resolve_state(url, token, configured_entity)
         states = [state]
         selected = resolved_ids
+    ping_ms = round(max(0.0, (time.monotonic() - request_started) * 1000), 1)
 
     units = [state_payload(state, [str(state.get("entity_id") or selected[index])])
              for index, state in enumerate(states)]
@@ -1150,6 +1152,7 @@ def status(
     payload["sync_non_power_controls"] = preference_enabled(
         (config or {}).get("sync_non_power_controls", True)
     )
+    payload["ping_ms"] = ping_ms
     return emit(payload)
 
 

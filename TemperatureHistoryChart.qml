@@ -20,6 +20,7 @@ Item {
   property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
   property bool connected: false
+  property real pingMs: -1
   property color liveColor: "#79B889"
 
   implicitHeight: Style.space(248)
@@ -74,6 +75,12 @@ Item {
     return values.length > 0 ? root.formatTemperature(values[values.length - 1].temperature) : "NO DATA"
   }
 
+  function formatPing(value) {
+    var number = Number(value)
+    if (!isFinite(number) || number < 0) return "—"
+    return String(Math.max(0, Math.round(number))) + " MS"
+  }
+
   BorderSurface {
     anchors.fill: parent
     radius: root.panelRadius
@@ -124,15 +131,6 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(5)
 
-          Text {
-            text: root.connected ? "LIVE" : "OFFLINE"
-            color: root.connected ? root.liveColor : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-            font.letterSpacing: 0.8
-          }
-
           Item {
             width: Style.space(8)
             height: width
@@ -161,6 +159,15 @@ Item {
                 NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutQuad }
               }
             }
+          }
+
+          Text {
+            text: root.connected ? root.formatPing(root.pingMs) : "OFFLINE"
+            color: root.connected ? root.liveColor : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 0.8
           }
 
           Text {

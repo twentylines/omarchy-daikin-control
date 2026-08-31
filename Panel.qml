@@ -309,6 +309,10 @@ Panel {
   }
   readonly property string historySourceLabel: historySource === "server"
     ? "EXTERNAL · " + historyServerLabel : "LOCAL · LOGGED WHILE PC IS ON"
+  readonly property real historyPingMs: {
+    var value = Number(reading.ping_ms)
+    return isFinite(value) && value >= 0 ? value : -1
+  }
   readonly property string historyEmptyMessage: historySource === "server"
     ? (String(reading.history_error || "") !== "" ? "EXTERNAL LOG UNAVAILABLE" : "WAITING FOR EXTERNAL LOG…")
     : "WAITING FOR LOCAL READINGS…"
@@ -6837,6 +6841,7 @@ Panel {
           clip: true
           points: root.historyPoints
           rangeHours: root.historyHours
+          pingMs: root.historyPingMs
           unit: root.unit
           connected: root.connected
           sourceLabel: root.historySourceLabel

@@ -727,6 +727,7 @@ class HelperTests(unittest.TestCase):
                 "climate.bedroom",
                 "climate.living_room",
             ])
+            self.assertGreaterEqual(parsed["ping_ms"], 0)
             self.assertFalse(parsed["units"][0]["state"] != "off")
             self.assertTrue(parsed["units"][1]["state"] != "off")
         finally:
