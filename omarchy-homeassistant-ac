@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
+import subprocess
 import sys
 import tempfile
 import time
@@ -29,6 +32,10 @@ HISTORY_PATH = (
 )
 HISTORY_RETENTION_SECONDS = 24 * 60 * 60
 HISTORY_MAX_SAMPLES = 6000
+REMOTE_HISTORY_DEFAULT_URL = "http://127.0.0.1:8123"
+REMOTE_HISTORY_DEFAULT_PATH = "~/.local/state/omarchy/homeassistant-ac-temperature.json"
+REMOTE_HISTORY_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:@\-\[\]]+$")
+REMOTE_HISTORY_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_./~\-]+$")
 
 
 class HomeAssistantError(RuntimeError):
@@ -86,24 +93,81 @@ def history_hours(value: Any) -> float:
     return round(parsed, 2)
 
 
-def config_values(config: dict[str, Any]) -> tuple[str, str, str, bool, str, bool, float, bool]:
+def history_source(value: Any) -> str:
+    return "server" if str(value or "").strip().lower() == "server" else "local"
+
+
+def remote_history_target(value: Any, required: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        if required:
+            raise HomeAssistantError("Enter the SSH target for the Home Assistant host, such as sai@192.168.1.20")
+        return ""
+    if not REMOTE_HISTORY_TARGET_PATTERN.fullmatch(text) or text.count("@") > 1:
+        raise HomeAssistantError("SSH target may contain only a user@host address")
+    return text
+
+
+def remote_history_port(value: Any) -> int:
+    try:
+        port = int(str(value or "22").strip())
+    except (TypeError, ValueError) as exc:
+        raise HomeAssistantError("SSH port must be a number between 1 and 65535") from exc
+    if not 1 <= port <= 65535:
+        raise HomeAssistantError("SSH port must be a number between 1 and 65535")
+    return port
+
+
+def remote_history_path(value: Any) -> str:
+    text = str(value or REMOTE_HISTORY_DEFAULT_PATH).strip()
+    if (
+        not text
+        or not text.startswith(("/", "~/"))
+        or not REMOTE_HISTORY_PATH_PATTERN.fullmatch(text)
+        or ".." in text
+    ):
+        raise HomeAssistantError("The server history path is invalid")
+    return text
+
+
+def remote_history_settings(config: dict[str, Any]) -> tuple[str, int, str, str]:
+    return (
+        remote_history_target(config.get("history_remote_target")),
+        remote_history_port(config.get("history_remote_port", 22)),
+        normalize_url(config.get("history_remote_url") or REMOTE_HISTORY_DEFAULT_URL),
+        remote_history_path(config.get("history_remote_path")),
+    )
+
+
+def config_values(config: dict[str, Any]) -> tuple[
+    str, str, str, bool, bool, str, bool, float, bool, str, str, int, str, str
+]:
     url = normalize_url(config.get("url") or os.environ.get("HOME_ASSISTANT_URL") or DEFAULT_URL)
     token = str(config.get("token") or os.environ.get("HOME_ASSISTANT_TOKEN") or "").strip()
     entity_id = str(config.get("entity_id") or "").strip()
-    advanced_controls = preference_enabled(config.get("advanced_controls"))
+    advanced_controls = preference_enabled(config.get("advanced_controls", True))
+    master_switch_enabled = preference_enabled(config.get("master_switch_enabled"))
     display = temperature_display(config.get("temperature_display"))
     history_enabled = preference_enabled(config.get("history_enabled"))
     selected_history_hours = history_hours(config.get("history_hours"))
     history_custom = preference_enabled(config.get("history_custom"))
+    selected_history_source = history_source(config.get("history_source"))
+    remote_target, remote_port, remote_url, remote_path = remote_history_settings(config)
     return (
         url,
         token,
         entity_id,
         advanced_controls,
+        master_switch_enabled,
         display,
         history_enabled,
         selected_history_hours,
         history_custom,
+        selected_history_source,
+        remote_target,
+        remote_port,
+        remote_url,
+        remote_path,
     )
 
 
@@ -185,13 +249,8 @@ def temperature_unit(value: Any) -> str:
     return text if text.startswith("°") else f"°{text}"
 
 
-def load_temperature_history() -> dict[str, list[dict[str, Any]]]:
-    """Read best-effort local ambient samples without affecting live control."""
-    try:
-        with HISTORY_PATH.open(encoding="utf-8") as handle:
-            raw = json.load(handle)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return {}
+def clean_temperature_history(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    """Keep only the safe, timestamped sample shape the chart understands."""
     if not isinstance(raw, dict):
         return {}
 
@@ -220,6 +279,16 @@ def load_temperature_history() -> dict[str, list[dict[str, Any]]]:
         if valid:
             cleaned[entity_id] = valid[-HISTORY_MAX_SAMPLES:]
     return cleaned
+
+
+def load_temperature_history() -> dict[str, list[dict[str, Any]]]:
+    """Read best-effort local ambient samples without affecting live control."""
+    try:
+        with HISTORY_PATH.open(encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    return clean_temperature_history(raw)
 
 
 def save_temperature_history(history: dict[str, list[dict[str, Any]]]) -> None:
@@ -281,6 +350,226 @@ def record_temperature_history(entity_id: str, value: Any, unit: str) -> list[di
         # A read-only or unavailable state directory must not break status.
         pass
     return history.get(entity_id, [])
+
+
+def remote_history_display_name(target: str) -> str:
+    return target.rsplit("@", 1)[-1] if "@" in target else target
+
+
+def remote_history_ssh_command(target: str, port: int) -> list[str]:
+    return [
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=1",
+        "-p",
+        str(port),
+        target,
+    ]
+
+
+def remote_history_command_error(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip().splitlines()
+    first_line = detail[0].strip() if detail else "SSH returned an error"
+    lowered = first_line.lower()
+    if "batchmode" in lowered or "password" in lowered or "publickey" in lowered:
+        return "SSH key access is required for server history. Copy the SSH guide and try again."
+    if "could not resolve hostname" in lowered:
+        return "The server address could not be resolved over SSH."
+    return "Cannot read server history over SSH: " + first_line[:180]
+
+
+def load_remote_temperature_history(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    target, port, _url, path = remote_history_settings(config)
+    if not target:
+        raise HomeAssistantError("Server history is not configured. Add an SSH target in Settings.")
+    command = remote_history_ssh_command(target, port) + ["cat", "--", path]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise HomeAssistantError("SSH is not installed on this PC, so server history cannot be read.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HomeAssistantError("Timed out while reading server history over SSH.") from exc
+    except OSError as exc:
+        raise HomeAssistantError(f"Cannot read server history over SSH: {exc}") from exc
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result))
+    try:
+        raw = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise HomeAssistantError("The server history file is not valid JSON yet.") from exc
+    return clean_temperature_history(raw)
+
+
+def remote_history_source() -> int:
+    plugin_dir = Path(__file__).resolve().parent
+    try:
+        installer_source = (plugin_dir / "install-remote-history.sh").read_text(encoding="utf-8")
+        logger_source = (plugin_dir / "remote-history-logger.py").read_text(encoding="utf-8")
+        remote_uninstaller_source = (plugin_dir / "uninstall-remote-history.sh").read_text(encoding="utf-8")
+        local_uninstaller_source = (plugin_dir / "uninstall-local-homeassistant.sh").read_text(encoding="utf-8")
+        plugin_uninstaller_source = (plugin_dir / "uninstall-plugin.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        return fail(f"The server history source is incomplete: {exc}")
+    source = f"""--- install-remote-history.sh ---
+{installer_source}
+
+--- remote-history-logger.py ---
+{logger_source}
+
+--- uninstall-remote-history.sh ---
+{remote_uninstaller_source}
+
+--- uninstall-local-homeassistant.sh ---
+{local_uninstaller_source}
+
+--- uninstall-plugin.sh ---
+{plugin_uninstaller_source}
+"""
+    return emit({"ok": True, "source": source})
+
+
+def install_remote_history(config: dict[str, Any], payload: dict[str, Any]) -> int:
+    target = remote_history_target(payload.get("ssh_target"), required=True)
+    port = remote_history_port(payload.get("ssh_port", 22))
+    remote_url = normalize_url(payload.get("home_assistant_url") or REMOTE_HISTORY_DEFAULT_URL)
+    path = remote_history_path(payload.get("history_path"))
+    entity_id = str(payload.get("entity_id") or config.get("entity_id") or "").strip()
+    token = str(config.get("token") or "").strip()
+    if not token:
+        raise HomeAssistantError("Connect Home Assistant before installing server history.")
+    if not entity_id.startswith("climate."):
+        raise HomeAssistantError("Choose an air conditioner before installing server history.")
+
+    plugin_dir = Path(__file__).resolve().parent
+    try:
+        logger_source = (plugin_dir / "remote-history-logger.py").read_text(encoding="utf-8")
+        installer_source = (plugin_dir / "install-remote-history.sh").read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HomeAssistantError(f"The server history installer is incomplete: {exc}") from exc
+
+    def run_ssh(command: list[str], *, input_text: str | None = None, timeout: int = 20) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                command,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise HomeAssistantError("SSH and SCP are required on this PC. Install OpenSSH, then try again.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise HomeAssistantError("Timed out while installing the server history timer.") from exc
+        except OSError as exc:
+            raise HomeAssistantError(f"Cannot install server history over SSH: {exc}") from exc
+
+    prepare_script = """set -eu
+umask 077
+mkdir -p "$HOME/.local/bin" "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
+"""
+    result = run_ssh(remote_history_ssh_command(target, port) + ["bash", "-s"], input_text=prepare_script)
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result))
+
+    scp_options = [
+        "scp",
+        "-q",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-P",
+        str(port),
+    ]
+    for source_name, destination_name in (
+        ("remote-history-logger.py", ".local/bin/omarchy-homeassistant-ac-history.py"),
+        ("install-remote-history.sh", ".local/bin/install-omarchy-homeassistant-ac-history.sh"),
+    ):
+        result = run_ssh(
+            scp_options + [str(plugin_dir / source_name), f"{target}:{destination_name}"],
+            timeout=25,
+        )
+        if result.returncode != 0:
+            raise HomeAssistantError(remote_history_command_error(result))
+
+    set_permissions_script = """set -eu
+chmod 700 "$HOME/.local/bin/omarchy-homeassistant-ac-history.py"
+chmod 700 "$HOME/.local/bin/install-omarchy-homeassistant-ac-history.sh"
+"""
+    result = run_ssh(
+        remote_history_ssh_command(target, port) + ["bash", "-s"],
+        input_text=set_permissions_script,
+    )
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result))
+
+    logger_config: dict[str, str | int] = {
+        "url": remote_url,
+        "token": token,
+        "entity_id": entity_id,
+        "interval_seconds": 60,
+        "history_path": path,
+    }
+    config_json = json.dumps(logger_config, indent=2) + "\n"
+    remote_config_command = (
+        "set -eu; umask 077; "
+        'config_home="${XDG_CONFIG_HOME:-$HOME/.config}"; '
+        'mkdir -p "$config_home/omarchy"; '
+        'cat > "$config_home/omarchy/homeassistant-ac-history.json"; '
+        'chmod 600 "$config_home/omarchy/homeassistant-ac-history.json"'
+    )
+    result = run_ssh(
+        remote_history_ssh_command(target, port) + ["bash", "-c", shlex.quote(remote_config_command)],
+        input_text=config_json,
+    )
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result))
+
+    run_installer_script = """set -eu
+exec "$HOME/.local/bin/install-omarchy-homeassistant-ac-history.sh"
+"""
+    result = run_ssh(
+        remote_history_ssh_command(target, port) + ["bash", "-s"],
+        input_text=run_installer_script,
+        timeout=45,
+    )
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result))
+
+    config.update({
+        "history_source": "server",
+        "history_remote_target": target,
+        "history_remote_port": port,
+        "history_remote_url": remote_url,
+        "history_remote_path": path,
+    })
+    try:
+        save_config(config)
+    except OSError as exc:
+        raise HomeAssistantError(f"The server logger installed, but local settings could not be saved: {exc}") from exc
+    return emit({
+        "ok": True,
+        "history_source": "server",
+        "history_remote_target": target,
+        "history_remote_port": port,
+        "history_remote_url": remote_url,
+        "history_remote_path": path,
+        "message": "External server timer installed. It records while the Home Assistant host is on.",
+    })
 
 
 def resolve_state(url: str, token: str, configured_entity: str) -> tuple[dict[str, Any], list[str]]:
@@ -346,15 +635,34 @@ def turn_off_all(url: str, token: str) -> int:
     })
 
 
+def turn_on_all(url: str, token: str) -> int:
+    entities = list_entities(url, token)
+    entity_ids = [str(entity["id"]) for entity in entities]
+    if not entity_ids:
+        return fail("No available Home Assistant climate entities were found")
+    call_service(url, token, "turn_on", {"entity_id": entity_ids})
+    return emit({
+        "ok": True,
+        "turned_on": entity_ids,
+        "count": len(entity_ids),
+    })
+
+
 def config_snapshot(
     url: str,
     token: str,
     entity_id: str,
     advanced_controls: bool,
+    master_switch_enabled: bool,
     display: str,
     history_enabled: bool,
     selected_history_hours: float,
     history_custom: bool,
+    selected_history_source: str,
+    remote_target: str,
+    remote_port: int,
+    remote_url: str,
+    remote_path: str,
 ) -> int:
     return emit({
         "ok": True,
@@ -362,10 +670,16 @@ def config_snapshot(
         "url": url,
         "entity_id": entity_id,
         "advanced_controls": advanced_controls,
+        "master_switch_enabled": master_switch_enabled,
         "temperature_display": display,
         "history_enabled": history_enabled,
         "history_hours": selected_history_hours,
         "history_custom": history_custom,
+        "history_source": selected_history_source,
+        "history_remote_target": remote_target,
+        "history_remote_port": remote_port,
+        "history_remote_url": remote_url,
+        "history_remote_path": remote_path,
     })
 
 
@@ -454,11 +768,25 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "url": url,
         "token": token,
         "entity_id": entity_id,
-        "advanced_controls": preference_enabled(current_config.get("advanced_controls")),
+        "advanced_controls": preference_enabled(
+            payload["advanced_controls"] if "advanced_controls" in payload
+            else current_config.get("advanced_controls", True)
+        ),
+        "master_switch_enabled": preference_enabled(
+            payload["master_switch_enabled"] if "master_switch_enabled" in payload
+            else current_config.get("master_switch_enabled", False)
+        ),
         "temperature_display": temperature_display(current_config.get("temperature_display")),
         "history_enabled": preference_enabled(current_config.get("history_enabled")),
         "history_hours": history_hours(current_config.get("history_hours")),
         "history_custom": preference_enabled(current_config.get("history_custom")),
+        "history_source": history_source(current_config.get("history_source")),
+        "history_remote_target": remote_history_target(current_config.get("history_remote_target")),
+        "history_remote_port": remote_history_port(current_config.get("history_remote_port", 22)),
+        "history_remote_url": normalize_url(
+            current_config.get("history_remote_url") or REMOTE_HISTORY_DEFAULT_URL
+        ),
+        "history_remote_path": remote_history_path(current_config.get("history_remote_path")),
     }
     if current_config.get("poll_seconds") is not None:
         config["poll_seconds"] = current_config["poll_seconds"]
@@ -476,10 +804,16 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "name": selected["name"],
         "entities": entities,
         "advanced_controls": config["advanced_controls"],
+        "master_switch_enabled": config["master_switch_enabled"],
         "temperature_display": config["temperature_display"],
         "history_enabled": config["history_enabled"],
         "history_hours": config["history_hours"],
         "history_custom": config["history_custom"],
+        "history_source": config["history_source"],
+        "history_remote_target": config["history_remote_target"],
+        "history_remote_port": config["history_remote_port"],
+        "history_remote_url": config["history_remote_url"],
+        "history_remote_path": config["history_remote_path"],
     })
 
 
@@ -529,16 +863,35 @@ def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any
         "fan_mode": str(attrs.get("fan_mode") or ""),
         "fan_modes": [str(mode) for mode in fan_modes],
         "history": [],
+        "history_source": "local",
+        "history_server": "",
+        "history_error": "",
         "last_updated": state.get("last_updated"),
     }
 
 
-def status(url: str, token: str, configured_entity: str) -> int:
+def status(
+    url: str,
+    token: str,
+    configured_entity: str,
+    config: dict[str, Any] | None = None,
+) -> int:
     state, entity_ids = resolve_state(url, token, configured_entity)
     payload = state_payload(state, entity_ids)
-    payload["history"] = record_temperature_history(
-        payload["entity_id"], payload.get("ambient"), payload["unit"]
-    )
+    if config is not None and history_source(config.get("history_source")) == "server":
+        payload["history_source"] = "server"
+        target = remote_history_target(config.get("history_remote_target"))
+        payload["history_server"] = remote_history_display_name(target) if target else "NOT CONFIGURED"
+        try:
+            remote_history = load_remote_temperature_history(config)
+            payload["history"] = remote_history.get(payload["entity_id"], [])
+        except HomeAssistantError as exc:
+            payload["history"] = []
+            payload["history_error"] = str(exc)
+    else:
+        payload["history"] = record_temperature_history(
+            payload["entity_id"], payload.get("ambient"), payload["unit"]
+        )
     return emit(payload)
 
 
@@ -672,8 +1025,13 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
     value_text = raw_value.strip()
     if name == "advanced_controls":
         if value_text.lower() not in {"on", "off"}:
-            return fail("Advanced controls must be on or off")
+            return fail("Climate controls must be on or off")
         value: Any = value_text.lower() == "on"
+        config[name] = value
+    elif name == "master_switch_enabled":
+        if value_text.lower() not in {"on", "off"}:
+            return fail("MasterSwitch must be on or off")
+        value = value_text.lower() == "on"
         config[name] = value
     elif name == "temperature_display":
         value = temperature_display(value_text)
@@ -684,6 +1042,11 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         if value_text.lower() not in {"on", "off"}:
             return fail("Temperature history must be on or off")
         value = value_text.lower() == "on"
+        config[name] = value
+    elif name == "history_source":
+        if value_text.lower() not in {"local", "server"}:
+            return fail("Temperature history source must be local or server")
+        value = value_text.lower()
         config[name] = value
     elif name == "history_range":
         if value_text.lower() in {"1", "3", "6", "12", "24"}:
@@ -728,6 +1091,8 @@ def main(argv: list[str]) -> int:
     action = argv[1] if len(argv) > 1 else "status"
     if action == "reset-app" and len(argv) == 2:
         return reset_app()
+    if action == "remote-history-source" and len(argv) == 2:
+        return remote_history_source()
     try:
         config = load_config()
         (
@@ -735,10 +1100,16 @@ def main(argv: list[str]) -> int:
             token,
             entity_id,
             advanced_controls,
+            master_switch_enabled,
             display,
             history_enabled,
             selected_history_hours,
             history_custom,
+            selected_history_source,
+            remote_target,
+            remote_port,
+            remote_url,
+            remote_path,
         ) = config_values(config)
     except HomeAssistantError as exc:
         return fail(str(exc))
@@ -749,10 +1120,16 @@ def main(argv: list[str]) -> int:
             token,
             entity_id,
             advanced_controls,
+            master_switch_enabled,
             display,
             history_enabled,
             selected_history_hours,
             history_custom,
+            selected_history_source,
+            remote_target,
+            remote_port,
+            remote_url,
+            remote_path,
         )
     if action == "configure" and len(argv) == 2:
         try:
@@ -774,8 +1151,10 @@ def main(argv: list[str]) -> int:
     try:
         if action == "entities" and len(argv) == 2:
             return emit({"ok": True, "entities": list_entities(url, token)})
+        if action == "install-remote-history" and len(argv) == 2:
+            return install_remote_history(config, read_setup_payload())
         if action == "status":
-            return status(url, token, entity_id)
+            return status(url, token, entity_id, config)
         if action == "set-entity" and len(argv) == 3:
             return set_entity(config, argv[2])
         if action == "set-temperature" and len(argv) == 3:
@@ -788,10 +1167,14 @@ def main(argv: list[str]) -> int:
             return set_power(url, token, entity_id, argv[2])
         if action == "turn-off-all" and len(argv) == 2:
             return turn_off_all(url, token)
+        if action == "turn-on-all" and len(argv) == 2:
+            return turn_on_all(url, token)
         return fail(
             "Usage: config | configure | entities | status | set-entity <entity_id> "
             "| set-temperature <value> | set-mode <mode> | set-fan-mode <mode> "
-            "| set-power <on|off> | turn-off-all | set-preference <name> <value> "
+            "| set-power <on|off> | turn-off-all | turn-on-all "
+            "| install-remote-history | remote-history-source "
+            "| set-preference <name> <value> "
             "| reset-app"
         )
     except MultipleClimateEntitiesError as exc:

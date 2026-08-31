@@ -1,13 +1,13 @@
 # Omarchy Daikin Control
 
-Daikin Air puts your Home Assistant Daikin climate entity in the Omarchy bar:
+Daikin AC Controls puts your Home Assistant Daikin climate entity in the Omarchy bar:
 see the room temperature, compare it with the target, adjust the set point,
 and turn the air conditioner on or off without opening a dashboard.
 
 The widget talks to Home Assistant's local REST API. It does not talk directly
 to a Daikin unit or replace the Home Assistant Daikin integration. That makes
 the widget deliberately small and dependable: if Home Assistant exposes your
-unit as an available `climate.*` entity, Daikin Air can control it.
+unit as an available `climate.*` entity, Daikin AC Controls can control it.
 
 ## Install
 
@@ -37,21 +37,22 @@ reloads them. If the new version does not appear, run `omarchy refresh shell`.
 
 ## First-run setup
 
-Click the Daikin Air glyph in the bar. The centered setup panel asks for:
+Click the Daikin AC Controls glyph in the bar. The centered setup panel asks for:
 
 1. Your Home Assistant base address, such as `http://homeassistant.local:8123`,
    `http://192.168.1.20:8123`, or an HTTPS reverse-proxy URL.
 2. A Home Assistant long-lived access token. In Home Assistant, open your
    profile, go to **Security → Long-Lived Access Tokens**, choose **Create
    Token**, and copy the token immediately. Home Assistant only shows it once;
-   paste it into Daikin Air while the setup panel is open.
+   paste it into Daikin AC Controls while the setup panel is open.
 3. Which available climate entity to control when Home Assistant exposes more
    than one.
 
 The connection is tested before anything is saved. A single available climate
 entity is selected automatically; when there are several, the setup flow
 offers a readable name plus the exact entity ID so there is no manual JSON
-editing.
+editing. The onboarding screen also lets you start with climate controls on
+by default and optionally enable the MasterSwitch.
 
 The token is sent to the bundled helper over stdin rather than as a command
 line argument. It is stored at
@@ -60,16 +61,46 @@ never shown in the bar, and never printed by the helper. The helper sends
 requests only to the Home Assistant address you entered.
 
 To change the server, token, or selected entity later, open the panel and use
-the small settings button in the hero card. The separate Advanced Options
-section can reveal supported climate modes and fan speeds, choose whether the
-bar shows ambient temperature, target temperature, or both, and enable the
-optional Temperature History for Nerds chart.
+the small settings button in the hero card. Settings groups connection and
+local-server setup together; **Preferences** can show supported climate modes
+and fan speeds, choose whether the bar shows ambient temperature, target
+temperature, or both, and enable the optional Temperature History for Nerds
+chart. **Maintenance** contains project help, reset controls, and uninstall
+options.
 
-The chart is a private local log on this PC. Daikin Air keeps at most the latest
-24 hours of ambient readings, and the PC must be active for new samples to be
-recorded. Sleep, shutdown, network outages, and other gaps remain empty in the
-chart. The chart can show the latest 1, 3, 6, 12, or 24 hours, or a custom range
-between 1 and 24 hours.
+The chart keeps at most the latest 24 hours of ambient readings. By default it
+is a private local log on this PC, so sleep, shutdown, network outages, and
+other gaps remain empty. In **Settings → Preferences**, switch **History
+Source** to **EXTERNAL SERVER** to install a server-side logger over SSH. The
+external server must be the same host that runs Home Assistant; that is the
+only host whose local API the logger can read. The chart then reads only the
+external file and labels itself with that host's address; it never falls back
+to the local log. A user systemd timer records once per minute while the
+external Home Assistant host is on, so it can continue while this PC sleeps,
+shuts down, or restarts.
+
+Enter the SSH target (for example `sai@192.168.1.20`), the SSH port, and the
+Home Assistant URL as seen from that same external host (usually
+`http://127.0.0.1:8123`), then choose **INSTALL SERVER TIMER**. SSH key access
+is required because the widget cannot safely prompt for a password. **HOME
+ASSISTANT SETTINGS** opens the Home Assistant address used by the widget.
+**MANUAL GUIDE** opens the dedicated GitHub guide. **COPY SOURCE** is an
+optional clipboard action for reviewing the exact files locally before
+installing.
+
+The external-server installer is intentionally transparent. It copies the two
+named scripts in this repository, sends the token-bearing config through the
+encrypted SSH connection's standard input rather than a command-line
+argument, stores that config and the history file with owner-only permissions,
+and creates one user-owned systemd service plus timer. It does not use `sudo`,
+install packages, open ports, send telemetry, or call Home Assistant control
+endpoints. The optional `loginctl enable-linger` step is best-effort so the
+user timer can run while nobody is logged in; it does not request administrator
+approval. Review the source before running it.
+
+The chart can show the latest 1, 3, 6, 12, or 24 hours, or a custom range
+between 1 and 24 hours. Its time axis stays compact and adds a small date
+marker only when the range crosses into another day.
 
 ### Optional local Home Assistant server
 
@@ -89,7 +120,7 @@ the image from the Home Assistant GitHub Container Registry. The plugin does
 not silently install this server, remove other containers, or change an
 existing remote Home Assistant connection.
 
-When the container starts, Daikin Air opens `http://127.0.0.1:8123` in your
+When the container starts, Daikin AC Controls opens `http://127.0.0.1:8123` in your
 browser. Finish Home Assistant onboarding, add the Daikin integration, create
 a long-lived access token, and paste that token into the connection form. The
 Container installation does not include Home Assistant apps, so integrations
@@ -97,8 +128,70 @@ that depend on those apps may need Home Assistant OS or another supported
 installation type instead.
 
 The local container is independent of the plugin. Removing or disabling Daikin
-Air does not remove the container or its data. Review the container and
-`~/.local/share/omarchy/homeassistant` before removing them yourself.
+AC Controls does not remove the container or its data by default. The Settings
+panel's **REMOVE EVERYTHING** uninstall scope can remove the plugin-managed
+container and `~/.local/share/omarchy/homeassistant` data when they exist. It
+refuses a same-named container without the plugin's management label. Docker,
+the Home Assistant image, and unrelated containers are never removed.
+
+### External server history
+
+This optional feature is for the same Linux host that runs Home Assistant,
+accepts SSH connections, and has a user systemd service manager. A different
+SSH machine cannot provide the history because the logger reads Home
+Assistant's local API on the host where it runs.
+
+Read the dedicated [External server history guide](EXTERNAL_SERVER_HISTORY.md)
+for the requirements, manual checklist, installed files, review notes, and
+uninstall behavior.
+
+#### What is installed and what is not
+
+The files are installed under the SSH user's home directory, with the config
+and history file limited to that owner. The installer uses no `sudo`, package
+installation, open ports, cloud service, usage analytics, or developer
+telemetry. It does not call Home Assistant control endpoints. The optional
+`loginctl enable-linger` step is best-effort and is used only so the user timer
+can continue while nobody is logged in.
+
+The exact files are available for review as
+[`remote-history-logger.py`](remote-history-logger.py) and
+[`install-remote-history.sh`](install-remote-history.sh). The cleanup source is
+also available as [`uninstall-remote-history.sh`](uninstall-remote-history.sh),
+[`uninstall-local-homeassistant.sh`](uninstall-local-homeassistant.sh), and
+[`uninstall-plugin.sh`](uninstall-plugin.sh).
+The **COPY SOURCE** action copies the installer, logger, and cleanup scripts
+together.
+After installation, inspect the timer with:
+
+```bash
+systemctl --user status omarchy-homeassistant-ac-history.timer
+journalctl --user -u omarchy-homeassistant-ac-history.service
+```
+
+The uninstall flow sends `uninstall-remote-history.sh` over the same SSH
+connection only when **REMOVE APP + LOGGER** or **REMOVE EVERYTHING** is
+confirmed. It stops the matching user timer and removes only the named logger,
+installer, config, service, timer, and 24-hour history file. If that external
+installation is absent, cleanup succeeds without changing anything on the
+server.
+
+### Uninstall scopes
+
+Settings → **Maintenance** opens three separately confirmed choices:
+
+- **REMOVE EVERYTHING** removes the plugin, its saved data, the external
+  history logger if configured, and the plugin-managed local Home Assistant
+  container/data if present.
+- **REMOVE APP + LOGGER** removes the plugin, its saved data, and the external
+  history logger if configured, while keeping local Home Assistant.
+- **REMOVE PLUGIN ONLY** removes only the installed plugin files and keeps all
+  plugin data, Home Assistant resources, and external history.
+
+Home Assistant itself is never contacted by the uninstall scripts. Docker, the
+Home Assistant image, unrelated containers, and unrelated server data remain
+untouched. The local plugin is removed through Omarchy's supported
+`omarchy plugin remove --yes` command.
 
 ## Daikin compatibility
 
@@ -119,13 +212,13 @@ official integration currently documents these controller families and paths:
 
 This list is controller-focused because the Wi-Fi module and Home Assistant
 integration determine compatibility more than the indoor unit's marketing
-name. Some models do not expose fan or swing controls, but Daikin Air only
+name. Some models do not expose fan or swing controls, but Daikin AC Controls only
 needs the climate entity's power, mode, ambient temperature, and target
 temperature capabilities. Fan-speed and extra mode controls appear only when
 Home Assistant exposes them. Swing and preset controls are intentionally not
 shown because support varies widely between units. If your unit is not supported by the official local
 integration, Home Assistant also documents ESP32-Faikout as an alternative
-path; Daikin Air can use its resulting `climate.*` entity too.
+path; Daikin AC Controls can use its resulting `climate.*` entity too.
 
 See the [Home Assistant Daikin AC documentation](https://www.home-assistant.io/integrations/daikin/)
 for the maintained hardware list, regional caveats, firewall requirements,
@@ -144,9 +237,14 @@ and integration setup instructions.
 | `Esc` | Close the panel |
 | Settings button | Re-run connection setup |
 
-When Advanced Options are enabled, supported Home Assistant climate modes and
+When climate controls are enabled, supported Home Assistant climate modes and
 fan speeds appear in the main panel. Changes preview immediately and are sent
 to Home Assistant in the background.
+
+Preferences also includes MasterSwitch. Its two-step confirmations can send
+`climate.turn_off` or `climate.turn_on` to every available Home Assistant
+climate entity, including rooms other than the selected one. Reset App has its
+own confirmation and only removes Daikin AC Controls data from this PC.
 
 Temperature changes preview immediately and are committed after interaction
 stops. Power changes remain visibly pending while Home Assistant settles, with
@@ -156,7 +254,7 @@ See [PATCHNOTES.md](PATCHNOTES.md) for the project update history.
 
 The project page has setup help, Home Assistant notes, and future tutorials:
 [github.com/twentylines/omarchy-daikin-control](https://github.com/twentylines/omarchy-daikin-control).
-Daikin Air is made by Sai.
+Daikin AC Controls is made by Sai.
 
 ## Requirements
 
@@ -171,6 +269,10 @@ Daikin Air is made by Sai.
 The optional local server flow also needs internet access, Docker, and the
 ability to approve Docker package and service setup when those are not already
 available.
+
+The optional server-history flow also needs the `ssh` client on this PC, SSH
+key access to the Home Assistant host, and a Linux server with Python 3 and
+systemd user services.
 
 ## Troubleshooting
 
@@ -202,10 +304,27 @@ open the widget again; the setup flow will return automatically.
 
 ### Reset the app
 
-Use **App Data > Reset App** in the settings panel to remove Daikin Air's
+Use **Plugin Setup > Reset App** in the settings panel to remove Daikin AC Controls'
 saved connection, preferences, and local temperature history. The action asks
 for confirmation and does not reset Home Assistant, Docker, the local
 Home Assistant container, or any Home Assistant data.
+
+### Uninstall the plugin
+
+Use **Settings → Maintenance → UNINSTALL PLUGIN**. The first click opens
+three choices; each choice shows its own removal notice and requires a second
+confirmation. If external history is configured, the logger cleanup is
+idempotent: it also succeeds when the timer was already removed or was never
+installed.
+
+### External server history is unavailable
+
+Confirm that the SSH target works without a password prompt, that the server
+is powered on, and that the server logger's Home Assistant URL is reachable
+from the same host that runs Home Assistant. Reinstall the timer from
+**Settings → Preferences → EXTERNAL SERVER** if the user timer or token
+changed. Open the [external-server guide](EXTERNAL_SERVER_HISTORY.md) or use
+**COPY SOURCE** to inspect the exact files again.
 
 ## Development
 

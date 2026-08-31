@@ -33,6 +33,8 @@ Item {
   property int popupRowHeight: Style.spacing.popupRowHeight
   property real controlRadius: Style.cornerRadius
   property bool showLabel: true
+  readonly property int motionFast: 140
+  readonly property int motionStandard: 220
 
   // Panel-cursor flag. When true, the trigger renders the shared
   // hover-cursor state. Active Qt focus defaults to the same visuals.
@@ -157,6 +159,45 @@ Item {
         topPadding: Border.top(root.popupBorderSpec) + Style.spacing.hairline
         bottomPadding: Border.bottom(root.popupBorderSpec) + Style.spacing.hairline
         focus: true
+        transformOrigin: Item.Top
+
+        enter: Transition {
+          ParallelAnimation {
+            NumberAnimation {
+              property: "opacity"
+              from: 0
+              to: 1
+              duration: root.motionFast
+              easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+              property: "scale"
+              from: 0.96
+              to: 1
+              duration: root.motionStandard
+              easing.type: Easing.OutCubic
+            }
+          }
+        }
+
+        exit: Transition {
+          ParallelAnimation {
+            NumberAnimation {
+              property: "opacity"
+              from: 1
+              to: 0
+              duration: root.motionFast
+              easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+              property: "scale"
+              from: 1
+              to: 0.97
+              duration: root.motionFast
+              easing.type: Easing.InCubic
+            }
+          }
+        }
 
         background: BorderSurface {
           color: root.background

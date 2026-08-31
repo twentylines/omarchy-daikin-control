@@ -173,35 +173,9 @@ BarWidget {
         spacing: Style.spacing.lg
 
         Text {
-          visible: panelLoader.item ? panelLoader.item.showAmbientOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
           text: panelLoader.item ? panelLoader.item.ambientText : ""
-          color: button.foreground
-          font.family: button.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          renderType: Text.NativeRendering
-          verticalAlignment: Text.AlignVCenter
-        }
-
-        Text {
-          visible: panelLoader.item
-            ? panelLoader.item.showAmbientOnBar && panelLoader.item.showTargetOnBar : true
-          width: implicitWidth
-          height: Style.bar.iconCanvas
-          text: "→"
-          color: button.foreground
-          font.family: button.fontFamily
-          font.pixelSize: Style.font.caption
-          renderType: Text.NativeRendering
-          verticalAlignment: Text.AlignVCenter
-        }
-
-        Text {
-          visible: panelLoader.item ? panelLoader.item.showTargetOnBar : true
-          width: implicitWidth
-          height: Style.bar.iconCanvas
-          text: panelLoader.item ? panelLoader.item.targetText : ""
           color: button.foreground
           font.family: button.fontFamily
           font.pixelSize: Style.font.bodySmall

@@ -2,8 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// A deliberately small, local-only chart. The helper supplies timestamped
-// ambient readings; this component only draws them and never fetches data.
+// A deliberately small chart. The helper supplies timestamped ambient
+// readings from either this PC or the configured Home Assistant host; this
+// component only draws them and never fetches data.
 Item {
   id: root
 
@@ -16,8 +17,10 @@ Item {
   property color borderColor: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.14)
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
+  property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
+  property string emptyMessage: "WAITING FOR LOCAL READINGS…"
 
-  implicitHeight: Style.space(236)
+  implicitHeight: Style.space(248)
   height: implicitHeight
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
@@ -50,11 +53,18 @@ Item {
     return String(Math.round(number * 100) / 100).replace(/\.0$/, "") + " H"
   }
 
-  function formatTime(timestamp, rangeSeconds) {
+  function formatTime(timestamp) {
     var date = new Date(Number(timestamp) * 1000)
-    if (rangeSeconds <= 6 * 60 * 60)
-      return Qt.formatTime(date, "HH:mm")
-    return Qt.formatDateTime(date, "dd MMM HH:mm")
+    return Qt.formatTime(date, "HH:mm")
+  }
+
+  function dayKey(timestamp) {
+    var date = new Date(Number(timestamp) * 1000)
+    return date.getFullYear() + ":" + date.getMonth() + ":" + date.getDate()
+  }
+
+  function formatDay(timestamp) {
+    return Qt.formatDate(new Date(Number(timestamp) * 1000), "dd MMM")
   }
 
   function latestText() {
@@ -85,6 +95,7 @@ Item {
 
           Text {
             id: historyTitle
+            width: parent.width
             text: "AMBIENT HISTORY"
             color: root.foreground
             font.family: root.fontFamily
@@ -94,7 +105,8 @@ Item {
           }
 
           Text {
-            text: "LOCAL ONLY · PC MUST BE ACTIVE TO RECORD"
+            width: parent.width
+            text: root.sourceLabel
             color: Qt.darker(root.foreground, 1.6)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -146,12 +158,6 @@ Item {
             context.reset()
 
             var values = root.numericPoints()
-            var left = Style.space(42)
-            var right = Math.max(left + 20, width - Style.space(8))
-            var top = Style.space(12)
-            var bottom = Math.max(top + 20, height - Style.space(26))
-            var plotWidth = right - left
-            var plotHeight = bottom - top
             var now = Date.now() / 1000
             var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
             var start = now - rangeSeconds
@@ -180,7 +186,19 @@ Item {
               maxValue += padding
             }
 
-            context.font = Style.font.caption + "px '" + root.fontFamily + "'"
+            var fontFamily = "'" + root.fontFamily + "'"
+            context.font = Style.font.caption + "px " + fontFamily
+            var maxLabelWidth = Math.max(
+              context.measureText(root.formatTemperature(maxValue)).width,
+              context.measureText(root.formatTemperature(minValue)).width
+            )
+            var left = Math.max(Style.space(56), maxLabelWidth + Style.space(14))
+            var right = Math.max(left + Style.space(40), width - Style.space(12))
+            var top = Style.space(14)
+            var bottom = Math.max(top + Style.space(32), height - Style.space(40))
+            var plotWidth = right - left
+            var plotHeight = bottom - top
+
             context.fillStyle = root.alpha(root.foreground, 0.58)
             context.lineWidth = 1
             context.strokeStyle = root.alpha(root.foreground, 0.09)
@@ -193,7 +211,7 @@ Item {
               context.lineTo(right, y)
               context.stroke()
               var axisValue = maxValue - (maxValue - minValue) * yRatio
-              drawLabel(context, root.formatTemperature(axisValue), left - Style.space(7), y, "right")
+              drawLabel(context, root.formatTemperature(axisValue), left - Style.space(12), y, "right")
             }
 
             for (var xIndex = 0; xIndex < 3; xIndex++) {
@@ -203,20 +221,26 @@ Item {
               context.moveTo(x, top)
               context.lineTo(x, bottom)
               context.stroke()
-              drawLabel(
-                context,
-                root.formatTime(start + rangeSeconds * xRatio, rangeSeconds),
-                x,
-                height - Style.space(10),
-                xIndex === 0 ? "left" : (xIndex === 2 ? "right" : "center")
-              )
+              var axisTimestamp = start + rangeSeconds * xRatio
+              var axisAlign = xIndex === 0 ? "left" : (xIndex === 2 ? "right" : "center")
+              if (xIndex > 0) {
+                var previousTimestamp = start + rangeSeconds * ((xIndex - 1) / 2)
+                if (root.dayKey(axisTimestamp) !== root.dayKey(previousTimestamp)) {
+                  context.font = Math.max(8, Style.font.caption - 2) + "px " + fontFamily
+                  context.fillStyle = root.alpha(root.foreground, 0.48)
+                  drawLabel(context, root.formatDay(axisTimestamp), x, height - Style.space(27), axisAlign)
+                }
+              }
+              context.font = Style.font.caption + "px " + fontFamily
+              context.fillStyle = root.alpha(root.foreground, 0.70)
+              drawLabel(context, root.formatTime(axisTimestamp), x, height - Style.space(11), axisAlign)
             }
 
             if (visible.length === 0) {
               context.fillStyle = root.alpha(root.foreground, 0.54)
               context.textAlign = "center"
               context.textBaseline = "middle"
-              context.fillText("Waiting for local readings…", left + plotWidth / 2, top + plotHeight / 2)
+              context.fillText(root.emptyMessage, left + plotWidth / 2, top + plotHeight / 2)
               return
             }
 
@@ -290,6 +314,7 @@ Item {
             function onPointsChanged() { chart.requestPaint() }
             function onRangeHoursChanged() { chart.requestPaint() }
             function onUnitChanged() { chart.requestPaint() }
+            function onEmptyMessageChanged() { chart.requestPaint() }
           }
         }
       }

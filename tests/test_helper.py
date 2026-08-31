@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 
 HELPER = Path(__file__).resolve().parents[1] / "omarchy-homeassistant-ac"
@@ -114,6 +115,8 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(helper.CONFIG_PATH.stat().st_mode & 0o777, 0o600)
                 saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
                 self.assertEqual(saved["entity_id"], "climate.office")
+                self.assertTrue(saved["advanced_controls"])
+                self.assertFalse(saved["master_switch_enabled"])
             finally:
                 helper.CONFIG_PATH = original_path
                 helper.urlopen = original_urlopen
@@ -188,6 +191,187 @@ class HelperTests(unittest.TestCase):
                 saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
                 self.assertEqual(saved["history_hours"], 2.5)
                 self.assertTrue(saved["history_custom"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_preferences_support_server_history_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        {
+                            "url": "http://ha.local:8123",
+                            "token": "test-secret",
+                            "entity_id": "climate.office",
+                        },
+                        "history_source",
+                        "server",
+                    )
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertEqual(parsed["preference"], "history_source")
+                self.assertEqual(parsed["value"], "server")
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["history_source"], "server")
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_server_status_uses_remote_history_without_writing_local_history(self):
+        state = {
+            "entity_id": "climate.office",
+            "state": "cool",
+            "attributes": {
+                "friendly_name": "Office",
+                "current_temperature": 24,
+                "temperature": 22,
+                "temperature_unit": "C",
+                "hvac_modes": ["off", "cool"],
+            },
+        }
+        remote_samples = [{"timestamp": 2_000_000_000, "temperature": 23.5, "unit": "°C"}]
+        output = io.StringIO()
+        with patch.object(helper, "resolve_state", return_value=(state, ["climate.office"])), \
+                patch.object(helper, "load_remote_temperature_history", return_value={
+                    "climate.office": remote_samples,
+                }), \
+                patch.object(helper, "record_temperature_history") as record_local:
+            with contextlib.redirect_stdout(output):
+                result = helper.status(
+                    "http://ha.local:8123",
+                    "secret",
+                    "climate.office",
+                    {
+                        "history_source": "server",
+                        "history_remote_target": "sai@192.168.1.20",
+                        "history_remote_port": 22,
+                        "history_remote_url": "http://127.0.0.1:8123",
+                    },
+                )
+        self.assertEqual(result, 0)
+        parsed = json.loads(output.getvalue())
+        self.assertEqual(parsed["history_source"], "server")
+        self.assertEqual(parsed["history_server"], "192.168.1.20")
+        self.assertEqual(parsed["history"], remote_samples)
+        record_local.assert_not_called()
+
+    def test_remote_installer_saves_server_settings_after_ssh_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps({
+                "url": "http://ha.example.test:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+            }), encoding="utf-8")
+            try:
+                fake_results = [
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["scp"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["scp"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(
+                        ["ssh"], 0, "External Home Assistant history timer installed.\n", ""
+                    ),
+                ]
+                with patch.object(helper.subprocess, "run", side_effect=fake_results) as run:
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        result = helper.install_remote_history(
+                            helper.load_config(),
+                            {
+                                "ssh_target": "sai@192.168.1.20",
+                                "ssh_port": "2222",
+                                "home_assistant_url": "http://127.0.0.1:8123",
+                                "entity_id": "climate.office",
+                            },
+                        )
+                self.assertEqual(result, 0)
+                self.assertEqual(run.call_count, 6)
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(commands[0][-2:], ["bash", "-s"])
+                self.assertEqual(commands[1][0], "scp")
+                self.assertEqual(commands[2][0], "scp")
+                self.assertEqual(commands[3][-2:], ["bash", "-s"])
+                self.assertEqual(commands[5][-2:], ["bash", "-s"])
+                for call in run.call_args_list:
+                    self.assertNotIn("test-secret", call.args[0])
+                config_inputs = [call.kwargs.get("input") or "" for call in run.call_args_list]
+                self.assertEqual(sum("test-secret" in value for value in config_inputs), 1)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["history_source"], "server")
+                self.assertEqual(saved["history_remote_target"], "sai@192.168.1.20")
+                self.assertEqual(saved["history_remote_port"], 2222)
+                self.assertEqual(json.loads(output.getvalue())["ok"], True)
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_remote_history_source_includes_cleanup_scripts(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = helper.remote_history_source()
+        self.assertEqual(result, 0)
+        parsed = json.loads(output.getvalue())
+        self.assertNotIn("guide", parsed)
+        source = parsed["source"]
+        self.assertIn("install-remote-history.sh", source)
+        self.assertIn("remote-history-logger.py", source)
+        self.assertIn("uninstall-remote-history.sh", source)
+        self.assertIn("uninstall-local-homeassistant.sh", source)
+        self.assertIn("uninstall-plugin.sh", source)
+        self.assertIn("--remove-everything", source)
+
+        guide = (HELPER.parent / "EXTERNAL_SERVER_HISTORY.md").read_text(encoding="utf-8")
+        self.assertIn("external server must be the same host", guide)
+        self.assertIn("COPY SOURCE", guide)
+
+    def test_settings_uses_maintenance_without_privacy_banner_or_copy_guide(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn('label: "MAINTENANCE"', panel)
+        self.assertNotIn("PRIVACY & DATA", panel)
+        self.assertNotIn("NO TELEMETRY LOGGING", panel)
+        self.assertNotIn("COPY GUIDE", panel)
+        self.assertIn("EXTERNAL_SERVER_HISTORY.md", panel)
+
+    def test_remote_history_path_is_written_to_the_logger_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps({
+                "url": "http://ha.example.test:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+            }), encoding="utf-8")
+            try:
+                fake_results = [
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["scp"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["scp"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                    helper.subprocess.CompletedProcess(["ssh"], 0, "", ""),
+                ]
+                with patch.object(helper.subprocess, "run", side_effect=fake_results) as run:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        result = helper.install_remote_history(
+                            helper.load_config(),
+                            {
+                                "ssh_target": "sai@192.168.1.20",
+                                "ssh_port": 22,
+                                "home_assistant_url": "http://127.0.0.1:8123",
+                                "history_path": "~/.local/state/custom-ac.json",
+                                "entity_id": "climate.office",
+                            },
+                        )
+                self.assertEqual(result, 0)
+                config_inputs = [call.kwargs.get("input") or "" for call in run.call_args_list]
+                remote_config = next(value for value in config_inputs if "test-secret" in value)
+                self.assertEqual(json.loads(remote_config)["history_path"], "~/.local/state/custom-ac.json")
             finally:
                 helper.CONFIG_PATH = original_path
 
@@ -303,6 +487,53 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(
                 requests[-1][0],
                 "http://ha.local:8123/api/services/climate/turn_off",
+            )
+            self.assertEqual(
+                requests[-1][1]["entity_id"],
+                ["climate.bedroom", "climate.living_room"],
+            )
+        finally:
+            helper.urlopen = original_urlopen
+
+    def test_turn_on_all_targets_every_available_climate_entity(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        states = [
+            {
+                "entity_id": "climate.bedroom",
+                "state": "off",
+                "attributes": {"friendly_name": "Bedroom"},
+            },
+            {
+                "entity_id": "climate.living_room",
+                "state": "cool",
+                "attributes": {"friendly_name": "Living room"},
+            },
+            {
+                "entity_id": "climate.garage",
+                "state": "unavailable",
+                "attributes": {"friendly_name": "Garage"},
+            },
+        ]
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, json.loads(request.data) if request.data else None))
+            if request.method == "GET":
+                return FakeResponse(states)
+            return FakeResponse({"ok": True})
+
+        helper.urlopen = fake_urlopen
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = helper.turn_on_all("http://ha.local:8123", "secret")
+            self.assertEqual(result, 0)
+            parsed = json.loads(output.getvalue())
+            self.assertEqual(parsed["count"], 2)
+            self.assertEqual(parsed["turned_on"], ["climate.bedroom", "climate.living_room"])
+            self.assertEqual(
+                requests[-1][0],
+                "http://ha.local:8123/api/services/climate/turn_on",
             )
             self.assertEqual(
                 requests[-1][1]["entity_id"],
