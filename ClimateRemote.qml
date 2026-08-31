@@ -9,6 +9,7 @@ Item {
   id: root
 
   property var climate: ({})
+  property var localState: ({})
   property color foreground: Color.foreground
   property color dim: Qt.darker(foreground, 1.55)
   property color accent: Color.accent
@@ -16,8 +17,15 @@ Item {
   property real panelRadius: Style.cornerRadius
 
   readonly property bool connected: climate && String(climate.entity_id || "") !== ""
-  readonly property bool isOn: connected && String(climate.state || "").toLowerCase() !== "off"
-  readonly property real targetValue: Number(climate.target)
+  readonly property bool powerPending: String(localState.power || "") !== ""
+  readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
+  readonly property bool actualIsOn: connected && String(climate.state || "").toLowerCase() !== "off"
+  readonly property bool isOn: connected && (powerPending ? localPowerOn : actualIsOn)
+  readonly property bool hasLocalTarget: localState.target !== undefined
+    && isFinite(Number(localState.target))
+  readonly property real targetValue: hasLocalTarget ? Number(localState.target) : Number(climate.target)
+  readonly property string activeMode: String(localState.mode || climate.state || "")
+  readonly property string activeFanMode: String(localState.fan || climate.fan_mode || "")
   readonly property real minimumTemperature: isFinite(Number(climate.min_temp))
     ? Number(climate.min_temp) : 16
   readonly property real maximumTemperature: isFinite(Number(climate.max_temp))
@@ -99,7 +107,7 @@ Item {
         spacing: Style.space(7)
 
         Column {
-          width: parent.width - remotePowerButton.width - parent.spacing
+          width: parent.width - remotePowerArea.width - parent.spacing
           spacing: Style.space(2)
 
           Text {
@@ -115,8 +123,10 @@ Item {
           Text {
             width: parent.width
             text: root.connected
-              ? ("AMBIENT " + root.formatTemperature(root.climate.ambient)
-                + "  ·  " + (root.isOn ? "TARGET " + root.formatTemperature(root.targetValue) : "OFF"))
+              ? (root.powerPending
+                ? (root.localPowerOn ? "POWERING ON…" : "POWERING OFF…")
+                : ("AMBIENT " + root.formatTemperature(root.climate.ambient)
+                  + "  ·  " + (root.isOn ? "TARGET " + root.formatTemperature(root.targetValue) : "OFF")))
               : "WAITING FOR HOME ASSISTANT"
             color: root.dim
             font.family: root.fontFamily
@@ -125,23 +135,59 @@ Item {
           }
         }
 
-        Button {
-          id: remotePowerButton
+        Item {
+          id: remotePowerArea
           width: Style.space(54)
           height: Style.space(34)
-          text: root.isOn ? "OFF" : "ON"
-          iconText: "⏻"
-          iconSize: Style.font.caption
-          fontSize: Style.font.caption
-          fontFamily: root.fontFamily
-          foreground: root.isOn ? root.accent : root.foreground
-          accent: root.accent
-          background: root.isOn ? root.alpha(root.accent, 0.12) : root.alpha(root.foreground, 0.035)
-          bordered: true
-          radius: root.panelRadius
-          enabled: root.enabled && root.connected
-          tooltipText: root.isOn ? "Turn off this air conditioner" : "Turn on this air conditioner"
-          onClicked: root.powerRequested(root.isOn ? "off" : "on")
+
+          Button {
+            id: remotePowerButton
+            anchors.fill: parent
+            visible: !root.powerPending
+            text: root.isOn ? "OFF" : "ON"
+            iconText: "⏻"
+            iconSize: Style.font.caption
+            fontSize: Style.font.caption
+            fontFamily: root.fontFamily
+            foreground: root.isOn ? root.accent : root.foreground
+            accent: root.accent
+            background: root.isOn ? root.alpha(root.accent, 0.12) : root.alpha(root.foreground, 0.035)
+            bordered: true
+            radius: root.panelRadius
+            enabled: root.enabled && root.connected && !root.powerPending
+            tooltipText: root.isOn ? "Turn off this air conditioner" : "Turn on this air conditioner"
+            onClicked: root.powerRequested(root.isOn ? "off" : "on")
+          }
+
+          BorderSurface {
+            anchors.fill: parent
+            visible: root.powerPending
+            color: root.alpha(root.accent, 0.12)
+            borderSpec: Border.flat(root.alpha(root.accent, 0.42), 1)
+            radius: root.panelRadius
+
+            Row {
+              anchors.centerIn: parent
+              spacing: Style.space(3)
+
+              LoadingRing {
+                width: Style.space(12)
+                height: width
+                anchors.verticalCenter: parent.verticalCenter
+                color: root.accent
+                strokeWidth: Style.space(2)
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.localPowerOn ? "ON…" : "OFF…"
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+            }
+          }
         }
       }
 
@@ -174,7 +220,7 @@ Item {
           background: root.alpha(root.accent, 0.08)
           bordered: true
           radius: width / 2
-          enabled: root.enabled && root.isOn
+          enabled: root.enabled && root.isOn && !root.powerPending
           tooltipText: "Lower this target temperature"
           onClicked: {
             var next = root.adjustedTarget(-1)
@@ -207,7 +253,7 @@ Item {
           background: root.alpha(root.accent, 0.08)
           bordered: true
           radius: width / 2
-          enabled: root.enabled && root.isOn
+          enabled: root.enabled && root.isOn && !root.powerPending
           tooltipText: "Raise this target temperature"
           onClicked: {
             var next = root.adjustedTarget(1)
@@ -228,14 +274,14 @@ Item {
             ? (root.fanModeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
           label: "MODE"
           options: root.modeDropdownOptions
-          value: String(root.climate.state || "")
+          value: root.activeMode
           foreground: root.foreground
           background: Color.popups.background
           popupBorder: Color.popups.border
           accent: root.accent
           fontFamily: root.fontFamily
           controlRadius: root.panelRadius
-          enabled: root.enabled && root.isOn
+          enabled: root.enabled && root.isOn && !root.powerPending
           onChanged: function(value) { if (value) root.modeRequested(value) }
         }
 
@@ -245,14 +291,14 @@ Item {
             ? (root.modeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
           label: "FAN SPEED"
           options: root.fanModeDropdownOptions
-          value: String(root.climate.fan_mode || "")
+          value: root.activeFanMode
           foreground: root.foreground
           background: Color.popups.background
           popupBorder: Color.popups.border
           accent: root.accent
           fontFamily: root.fontFamily
           controlRadius: root.panelRadius
-          enabled: root.enabled && root.isOn
+          enabled: root.enabled && root.isOn && !root.powerPending
           onChanged: function(value) { if (value) root.fanModeRequested(value) }
         }
       }

@@ -83,11 +83,13 @@ Panel {
     root.appearanceSurfaceOpacity)
   property var reading: ({})
   property var entityOptions: []
+  property var unitLocalStates: ({})
   property string selectedEntity: ""
   property string pendingEntity: ""
   property string errorText: ""
   property bool actionBusy: false
   property string actionKind: ""
+  property string actionEntityId: ""
   property var localTarget: null
   property string pendingPowerState: ""
   property double powerRequestStartedAt: 0
@@ -342,6 +344,154 @@ Panel {
     return null
   }
 
+  function unitLocalState(entityId) {
+    var id = String(entityId || "")
+    return unitLocalStates && unitLocalStates[id] ? unitLocalStates[id] : ({})
+  }
+
+  function copyUnitLocalStates() {
+    var next = {}
+    var current = unitLocalStates || ({})
+    for (var id in current) {
+      var source = current[id] || ({})
+      var copy = {}
+      for (var key in source) copy[key] = source[key]
+      next[id] = copy
+    }
+    return next
+  }
+
+  function setUnitLocalStateValue(entityId, key, value) {
+    var id = String(entityId || "")
+    if (!id) return
+    var next = root.copyUnitLocalStates()
+    var current = next[id] || ({})
+    if (value === null || value === undefined || value === "") delete current[key]
+    else current[key] = value
+    var hasValues = false
+    for (var name in current) {
+      hasValues = true
+      break
+    }
+    if (hasValues) next[id] = current
+    else delete next[id]
+    unitLocalStates = next
+  }
+
+  function clearUnitLocalStates() {
+    unitLocalStates = ({})
+  }
+
+  function hasPendingUnitPower() {
+    var current = unitLocalStates || ({})
+    for (var id in current) {
+      if (current[id] && String(current[id].power || "") !== "") return true
+    }
+    return false
+  }
+
+  function hasPendingUnitPowerFinalCheck() {
+    var current = unitLocalStates || ({})
+    for (var id in current) {
+      if (current[id] && current[id].powerFinalCheckPending === true) return true
+    }
+    return false
+  }
+
+  function markUnitPowerFinalChecks() {
+    var now = Date.now()
+    var next = root.copyUnitLocalStates()
+    var changed = false
+    for (var id in next) {
+      var state = next[id]
+      if (!state || !state.power || state.powerFinalCheckPending === true) continue
+      var startedAt = Number(state.powerStartedAt)
+      if (isFinite(startedAt) && now - startedAt >= 15000) {
+        state.powerFinalCheckPending = true
+        changed = true
+      }
+    }
+    if (changed) unitLocalStates = next
+    return changed
+  }
+
+  function failUnitPowerFinalChecks() {
+    var next = root.copyUnitLocalStates()
+    var changed = false
+    for (var id in next) {
+      var state = next[id]
+      if (!state || state.powerFinalCheckPending !== true) continue
+      delete state.power
+      delete state.powerStartedAt
+      delete state.powerFinalCheckPending
+      changed = true
+      var hasValues = false
+      for (var key in state) {
+        hasValues = true
+        break
+      }
+      if (!hasValues) delete next[id]
+    }
+    if (changed) unitLocalStates = next
+    return changed
+  }
+
+  function reconcileUnitLocalStates() {
+    var current = unitLocalStates || ({})
+    var next = {}
+    var message = ""
+    for (var id in current) {
+      var source = current[id] || ({})
+      var state = {}
+      for (var key in source) state[key] = source[key]
+      var climate = root.unitReading(id)
+      if (climate) {
+        if (state.power) {
+          var observedOn = String(climate.state || "").toLowerCase() !== "off"
+          var requestedOn = state.power === "turning_on"
+          if (observedOn === requestedOn) {
+            delete state.power
+            delete state.powerStartedAt
+            delete state.powerFinalCheckPending
+          } else if (state.powerFinalCheckPending === true) {
+            delete state.power
+            delete state.powerStartedAt
+            delete state.powerFinalCheckPending
+            if (message === "") {
+              message = "Home Assistant still reports " + root.entityDisplayName(id)
+                + " as " + (observedOn ? "on" : "off") + "."
+            }
+          }
+        }
+        if (state.target !== undefined && root.sameTemperature(climate.target, state.target))
+          delete state.target
+        if (state.mode && root.sameControlValue(climate.state, state.mode)) delete state.mode
+        if (state.fan && root.sameControlValue(climate.fan_mode, state.fan)) delete state.fan
+      }
+      var hasValues = false
+      for (var field in state) {
+        hasValues = true
+        break
+      }
+      if (hasValues) next[id] = state
+    }
+    unitLocalStates = next
+    return message
+  }
+
+  function rejectUnitLocalAction() {
+    var id = String(actionEntityId || "")
+    if (!id) return
+    if (actionKind === "unit-temperature") root.setUnitLocalStateValue(id, "target", null)
+    else if (actionKind === "unit-mode") root.setUnitLocalStateValue(id, "mode", null)
+    else if (actionKind === "unit-fan") root.setUnitLocalStateValue(id, "fan", null)
+    else if (actionKind === "unit-power") {
+      root.setUnitLocalStateValue(id, "power", null)
+      root.setUnitLocalStateValue(id, "powerStartedAt", null)
+      root.setUnitLocalStateValue(id, "powerFinalCheckPending", null)
+    }
+  }
+
   function entityDisplayName(entityId) {
     var id = String(entityId || "")
     var item = unitReading(id)
@@ -519,6 +669,8 @@ Panel {
     } else if (actionKind === "fan") {
       if (fanModeInFlight !== "" && sameControlValue(localFanMode, fanModeInFlight)) localFanMode = ""
       fanModeInFlight = ""
+    } else if (actionKind.indexOf("unit-") === 0) {
+      root.rejectUnitLocalAction()
     }
   }
 
@@ -1188,6 +1340,7 @@ Panel {
         configResolved = true
         reading = ({})
         entityOptions = []
+        root.clearUnitLocalStates()
         selectedEntity = ""
         pendingEntity = ""
         root.clearLocalPower()
@@ -1430,9 +1583,19 @@ Panel {
         errorText = ""
         return
       }
+      if (source === "action" && actionKind.indexOf("unit-") === 0) {
+        root.rejectUnitLocalAction()
+        errorText = ""
+        return
+      }
       if (source === "status" && powerFinalCheckPending) {
         root.clearLocalPower()
         errorText = "Could not refresh Home Assistant after 15 seconds; showing the last known state."
+        return
+      }
+      if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
+        root.failUnitPowerFinalChecks()
+        errorText = "Could not refresh Home Assistant after 15 seconds; showing the last known AC states."
         return
       }
       errorText = "The control helper returned no data."
@@ -1442,6 +1605,7 @@ Panel {
       var parsed = JSON.parse(text)
       if (parsed && parsed.configured === false && parsed.ok !== true) {
         configured = false
+        root.clearUnitLocalStates()
         setupUrl = String(parsed.url || setupUrl)
         setupOpen = true
         setupError = parsed.error ? String(parsed.error) : "Connect Home Assistant to continue."
@@ -1462,8 +1626,13 @@ Panel {
       if (parsed && parsed.ok === true && parsed.requested_mode !== undefined) {
         if (parsed.entity_id) selectedEntity = String(parsed.entity_id)
         if (actionKind === "mode") modeInFlight = ""
-        if (parsed.restarting === true) root.beginModeRestart()
-        else root.clearModeRestart()
+        if (actionKind === "unit-mode" || actionKind === "unit-power") {
+          // Separate remotes keep their own optimistic state; do not alter
+          // the main remote's mode-restart state for their acknowledgements.
+        } else if (actionKind === "mode") {
+          if (parsed.restarting === true) root.beginModeRestart()
+          else root.clearModeRestart()
+        }
         errorText = ""
         return
       }
@@ -1520,6 +1689,8 @@ Panel {
           fanModeInFlight = ""
         }
         errorText = ""
+        var unitError = root.reconcileUnitLocalStates()
+        if (unitError !== "") errorText = unitError
       } else {
         if (source === "action" && hasLocalPower) {
           errorText = ""
@@ -1530,6 +1701,13 @@ Panel {
             : "Home Assistant status could not be refreshed"
           root.clearLocalPower()
           errorText = finalStatusError + "; showing the last known state."
+          return
+        }
+        if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
+          var unitFinalStatusError = parsed && parsed.error ? String(parsed.error)
+            : "Home Assistant status could not be refreshed"
+          root.failUnitPowerFinalChecks()
+          errorText = unitFinalStatusError + "; showing the last known AC states."
           return
         }
         if (source === "action") {
@@ -1551,6 +1729,11 @@ Panel {
       if (source === "status" && powerFinalCheckPending) {
         root.clearLocalPower()
         errorText = "Home Assistant returned invalid status data; showing the last known state."
+        return
+      }
+      if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
+        root.failUnitPowerFinalChecks()
+        errorText = "Home Assistant returned invalid status data; showing the last known AC states."
         return
       }
       if (source === "action") {
@@ -1576,7 +1759,9 @@ Panel {
     localTarget = null
     root.clearLocalPower()
     root.clearLocalClimateControls()
+    root.clearUnitLocalStates()
     lastTemperatureSent = null
+    actionEntityId = ""
     actionKind = "entity"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-entity", next]
@@ -1595,8 +1780,10 @@ Panel {
     localTarget = null
     root.clearLocalPower()
     root.clearLocalClimateControls()
+    root.clearUnitLocalStates()
     lastTemperatureSent = null
     errorText = ""
+    actionEntityId = ""
     actionKind = "selection"
     actionBusy = true
     selectionPayload = JSON.stringify({ entity_id: active, entities: next })
@@ -1623,6 +1810,7 @@ Panel {
   function dispatchModeRequest(value, entityId) {
     modeInFlight = value
     actionKind = "mode"
+    actionEntityId = entityId ? String(entityId) : ""
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-mode", value]
     if (entityId) actionProcess.command.push(String(entityId))
@@ -1632,6 +1820,7 @@ Panel {
   function dispatchFanModeRequest(value, entityId) {
     fanModeInFlight = value
     actionKind = "fan"
+    actionEntityId = entityId ? String(entityId) : ""
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-fan-mode", value]
     if (entityId) actionProcess.command.push(String(entityId))
@@ -1684,6 +1873,8 @@ Panel {
     if (!climate || String(climate.state || "").toLowerCase() === "off") return
     var next = normalizeUnitTarget(climate, value)
     if (next === null) return
+    root.setUnitLocalStateValue(entityId, "target", next)
+    actionEntityId = String(entityId)
     actionKind = "unit-temperature"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-temperature", String(next), String(entityId)]
@@ -1695,6 +1886,8 @@ Panel {
     var climate = unitReading(entityId)
     var next = String(value || "").trim()
     if (!climate || !next) return
+    root.setUnitLocalStateValue(entityId, "mode", next)
+    actionEntityId = String(entityId)
     actionKind = "unit-mode"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-mode", next, String(entityId)]
@@ -1706,6 +1899,8 @@ Panel {
     var climate = unitReading(entityId)
     var next = String(value || "").trim()
     if (!climate || !next) return
+    root.setUnitLocalStateValue(entityId, "fan", next)
+    actionEntityId = String(entityId)
     actionKind = "unit-fan"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-fan-mode", next, String(entityId)]
@@ -1716,10 +1911,16 @@ Panel {
     if (actionProcess.running || masterSwitchBusy) return
     var climate = unitReading(entityId)
     if (!climate) return
+    var requested = String(requestedPower || "").toLowerCase()
+    if (["on", "off"].indexOf(requested) < 0) return
+    root.setUnitLocalStateValue(entityId, "power", requested === "on" ? "turning_on" : "turning_off")
+    root.setUnitLocalStateValue(entityId, "powerStartedAt", Date.now())
+    root.setUnitLocalStateValue(entityId, "powerFinalCheckPending", false)
+    actionEntityId = String(entityId)
     actionKind = "unit-power"
     actionBusy = true
     actionProcess.command = [
-      "python3", root.helperPath, "set-power", String(requestedPower), String(entityId)
+      "python3", root.helperPath, "set-power", requested, String(entityId)
     ]
     actionProcess.running = true
   }
@@ -2124,6 +2325,7 @@ Panel {
     if (temperatureInFlight !== null || actionProcess.running) return
     if (lastTemperatureSent !== null && sameTemperature(value, lastTemperatureSent)) return
     temperatureInFlight = value
+    actionEntityId = ""
     actionKind = "temperature"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-temperature", String(value)]
@@ -2144,6 +2346,7 @@ Panel {
   }
 
   function dispatchPowerRequest(requestedPower) {
+    actionEntityId = ""
     actionKind = "power"
     actionBusy = true
     actionProcess.command = ["python3", root.helperPath, "set-power", requestedPower]
@@ -2411,6 +2614,7 @@ Panel {
       if (completedKind === "fan") fanModeInFlight = ""
       actionBusy = false
       actionKind = ""
+      actionEntityId = ""
       if (queuedPower !== "") {
         queuedPowerRequest = ""
         Qt.callLater(function() { root.dispatchPowerRequest(queuedPower) })
@@ -2446,6 +2650,17 @@ Panel {
       if (Date.now() - root.powerRequestStartedAt < 15000) return
       if (root.powerFinalCheckPending) return
       if (root.refreshStatus()) root.powerFinalCheckPending = true
+    }
+  }
+
+  Timer {
+    id: unitPowerConfirmTimer
+    interval: 500
+    repeat: true
+    running: root.hasPendingUnitPower()
+    onTriggered: {
+      if (!root.hasPendingUnitPower() || actionProcess.running || statusProcess.running) return
+      if (root.markUnitPowerFinalChecks()) root.refreshStatus()
     }
   }
 
@@ -5491,6 +5706,7 @@ Panel {
                   Style.space(240),
                   (separateRemoteFlow.width - separateRemoteFlow.spacing) / 2)
                 climate: root.unitReading(String(modelData)) || ({})
+                localState: root.unitLocalStates[String(modelData)] || ({})
                 accent: root.accentColor
                 foreground: root.foreground
                 dim: root.dim
