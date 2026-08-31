@@ -13,46 +13,52 @@ while the Omarchy PC sleeps, shuts down, or restarts.
 - A Linux Home Assistant host that is powered on when readings should be
   recorded.
 - Python 3 and a systemd user service manager on that host.
-- SSH key access from the Omarchy PC to the Home Assistant host, without a
-  password prompt.
+- A dedicated SSH key for the logger from the Omarchy PC to the Home Assistant
+  host, without a password prompt.
 - The Home Assistant URL as seen from the external host, usually
   `http://127.0.0.1:8123`.
 
 ## One-time SSH key setup
 
 The plugin does not collect or store an SSH password. If you currently log in
-with a password, keep the same SSH target and authorize a local key once:
+with a password, keep the same SSH target and authorize a dedicated logger key
+once. This leaves any existing `~/.ssh/id_ed25519` key unchanged:
 
 1. On the Omarchy PC, create a key if you do not already have one:
 
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C "omarchy-homeassistant-ac"
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/omarchy-homeassistant-ac -C "omarchy-homeassistant-ac"
    ```
 
-   Press Enter to accept the path. Adding a passphrase is recommended; your
-   SSH agent can keep the key available for the session.
+   The empty passphrase is intentional: the logger and the plugin must be
+   able to connect without an interactive prompt. The private key is created
+   with owner-only permissions and is used only for this plugin's server
+   history connection.
 
 2. Copy the public key to the Home Assistant host using the normal login
    password:
 
    ```bash
-   ssh-copy-id -i ~/.ssh/id_ed25519.pub sai@192.168.0.10
+   ssh-copy-id -i ~/.ssh/omarchy-homeassistant-ac.pub sai@192.168.0.10
    ```
 
    Replace `sai@192.168.0.10` with your server's SSH target if needed. The
    password is used by `ssh-copy-id` only to add the public key to that user's
-   `~/.ssh/authorized_keys`; it is never entered into the plugin.
+   `~/.ssh/authorized_keys`; it is never entered into the plugin. The
+   password-protected `id_ed25519` key is not used by this feature.
 
 3. Verify that key authentication works without a password prompt:
 
    ```bash
-   ssh -o BatchMode=yes sai@192.168.0.10 true
+   ssh -o BatchMode=yes -o IdentitiesOnly=yes \
+     -i ~/.ssh/omarchy-homeassistant-ac sai@192.168.0.10 true
    ```
 
    If that succeeds, use the same target in the plugin and choose **INSTALL
-   SERVER TIMER**. If `ssh-copy-id` is unavailable, install it through your
-   normal OpenSSH package or follow your distribution's documented
-   `authorized_keys` setup instead.
+   SERVER TIMER**. The plugin automatically uses
+   `~/.ssh/omarchy-homeassistant-ac` when it exists. If `ssh-copy-id` is
+   unavailable, install it through your normal OpenSSH package or follow your
+   distribution's documented `authorized_keys` setup instead.
 
 ## Install from the plugin
 

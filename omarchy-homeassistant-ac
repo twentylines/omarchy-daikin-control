@@ -36,6 +36,7 @@ REMOTE_HISTORY_DEFAULT_URL = "http://127.0.0.1:8123"
 REMOTE_HISTORY_DEFAULT_PATH = "~/.local/state/omarchy/homeassistant-ac-temperature.json"
 REMOTE_HISTORY_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:@\-\[\]]+$")
 REMOTE_HISTORY_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_./~\-]+$")
+REMOTE_HISTORY_IDENTITY_PATH = Path.home() / ".ssh/omarchy-homeassistant-ac"
 
 
 class HomeAssistantError(RuntimeError):
@@ -356,10 +357,22 @@ def remote_history_display_name(target: str) -> str:
     return target.rsplit("@", 1)[-1] if "@" in target else target
 
 
+def remote_history_identity_args() -> list[str]:
+    if REMOTE_HISTORY_IDENTITY_PATH.is_file():
+        return [
+            "-i",
+            str(REMOTE_HISTORY_IDENTITY_PATH),
+            "-o",
+            "IdentitiesOnly=yes",
+        ]
+    return []
+
+
 def remote_history_ssh_command(target: str, port: int) -> list[str]:
     return [
         "ssh",
         "-T",
+        *remote_history_identity_args(),
         "-o",
         "BatchMode=yes",
         "-o",
@@ -379,7 +392,7 @@ def remote_history_command_error(result: subprocess.CompletedProcess[str]) -> st
     first_line = detail[0].strip() if detail else "SSH returned an error"
     lowered = first_line.lower()
     if "batchmode" in lowered or "password" in lowered or "publickey" in lowered:
-        return "SSH key access is required for server history. Open MANUAL GUIDE to set it up, then try again."
+        return "SSH key setup is incomplete. Open MANUAL GUIDE and create the dedicated plugin key, then try again."
     if "could not resolve hostname" in lowered:
         return "The server address could not be resolved over SSH."
     return "Cannot read server history over SSH: " + first_line[:180]
@@ -488,6 +501,7 @@ mkdir -p "$HOME/.local/bin" "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
     scp_options = [
         "scp",
         "-q",
+        *remote_history_identity_args(),
         "-o",
         "BatchMode=yes",
         "-o",

@@ -84,8 +84,8 @@ Home Assistant URL as seen from that same external host (usually
 `http://127.0.0.1:8123`), then choose **INSTALL SERVER TIMER**. SSH key access
 is required because the widget cannot safely prompt for a password. If you
 currently use password login, the dedicated guide explains the one-time
-`ssh-keygen` and `ssh-copy-id` setup. **HOME ASSISTANT SETTINGS** opens the
-Home Assistant address used by the widget.
+dedicated-key `ssh-keygen` and `ssh-copy-id` setup. **HOME ASSISTANT SETTINGS**
+opens the Home Assistant address used by the widget.
 **MANUAL GUIDE** opens the dedicated GitHub guide. **COPY SOURCE** is an
 optional clipboard action for reviewing the exact files locally before
 installing.

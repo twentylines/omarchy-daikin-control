@@ -338,6 +338,20 @@ class HelperTests(unittest.TestCase):
         )
         self.assertIn("Open MANUAL GUIDE", result)
         self.assertNotIn("Copy the SSH guide", result)
+        self.assertIn("dedicated plugin key", result)
+
+    def test_remote_history_uses_dedicated_key_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.REMOTE_HISTORY_IDENTITY_PATH
+            helper.REMOTE_HISTORY_IDENTITY_PATH = Path(directory) / "omarchy-homeassistant-ac"
+            helper.REMOTE_HISTORY_IDENTITY_PATH.write_text("test key placeholder", encoding="utf-8")
+            try:
+                command = helper.remote_history_ssh_command("sai@192.168.0.10", 22)
+                self.assertIn("-i", command)
+                self.assertIn(str(helper.REMOTE_HISTORY_IDENTITY_PATH), command)
+                self.assertIn("IdentitiesOnly=yes", command)
+            finally:
+                helper.REMOTE_HISTORY_IDENTITY_PATH = original_path
 
     def test_settings_uses_maintenance_without_privacy_banner_or_copy_guide(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")

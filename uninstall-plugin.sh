@@ -119,6 +119,14 @@ if ((remove_external_history == 1)); then
   ssh_command=(
     ssh
     -T
+  )
+  if [[ -f "$HOME/.ssh/omarchy-homeassistant-ac" ]]; then
+    ssh_command+=(
+      -i "$HOME/.ssh/omarchy-homeassistant-ac"
+      -o IdentitiesOnly=yes
+    )
+  fi
+  ssh_command+=(
     -o BatchMode=yes
     -o ConnectTimeout=8
     -o ServerAliveInterval=5
