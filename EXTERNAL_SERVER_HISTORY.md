@@ -18,6 +18,42 @@ while the Omarchy PC sleeps, shuts down, or restarts.
 - The Home Assistant URL as seen from the external host, usually
   `http://127.0.0.1:8123`.
 
+## One-time SSH key setup
+
+The plugin does not collect or store an SSH password. If you currently log in
+with a password, keep the same SSH target and authorize a local key once:
+
+1. On the Omarchy PC, create a key if you do not already have one:
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C "omarchy-homeassistant-ac"
+   ```
+
+   Press Enter to accept the path. Adding a passphrase is recommended; your
+   SSH agent can keep the key available for the session.
+
+2. Copy the public key to the Home Assistant host using the normal login
+   password:
+
+   ```bash
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub sai@192.168.0.10
+   ```
+
+   Replace `sai@192.168.0.10` with your server's SSH target if needed. The
+   password is used by `ssh-copy-id` only to add the public key to that user's
+   `~/.ssh/authorized_keys`; it is never entered into the plugin.
+
+3. Verify that key authentication works without a password prompt:
+
+   ```bash
+   ssh -o BatchMode=yes sai@192.168.0.10 true
+   ```
+
+   If that succeeds, use the same target in the plugin and choose **INSTALL
+   SERVER TIMER**. If `ssh-copy-id` is unavailable, install it through your
+   normal OpenSSH package or follow your distribution's documented
+   `authorized_keys` setup instead.
+
 ## Install from the plugin
 
 1. Open **Daikin AC Controls → Settings → Preferences**.

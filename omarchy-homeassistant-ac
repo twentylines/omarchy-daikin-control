@@ -379,7 +379,7 @@ def remote_history_command_error(result: subprocess.CompletedProcess[str]) -> st
     first_line = detail[0].strip() if detail else "SSH returned an error"
     lowered = first_line.lower()
     if "batchmode" in lowered or "password" in lowered or "publickey" in lowered:
-        return "SSH key access is required for server history. Copy the SSH guide and try again."
+        return "SSH key access is required for server history. Open MANUAL GUIDE to set it up, then try again."
     if "could not resolve hostname" in lowered:
         return "The server address could not be resolved over SSH."
     return "Cannot read server history over SSH: " + first_line[:180]

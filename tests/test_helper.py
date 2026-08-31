@@ -328,6 +328,16 @@ class HelperTests(unittest.TestCase):
         guide = (HELPER.parent / "EXTERNAL_SERVER_HISTORY.md").read_text(encoding="utf-8")
         self.assertIn("external server must be the same host", guide)
         self.assertIn("COPY SOURCE", guide)
+        self.assertIn("ssh-copy-id", guide)
+
+    def test_ssh_auth_error_points_to_manual_guide(self):
+        result = helper.remote_history_command_error(
+            helper.subprocess.CompletedProcess(
+                ["ssh"], 255, "", "Permission denied (publickey,password)."
+            )
+        )
+        self.assertIn("Open MANUAL GUIDE", result)
+        self.assertNotIn("Copy the SSH guide", result)
 
     def test_settings_uses_maintenance_without_privacy_banner_or_copy_guide(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
