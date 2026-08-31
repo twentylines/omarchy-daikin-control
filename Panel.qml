@@ -3439,28 +3439,6 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            BorderSurface {
-              width: parent.width
-              implicitHeight: appDataWarning.implicitHeight + Style.space(18)
-              color: root.alpha(root.urgent, 0.07)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
-              radius: root.compactRadius
-
-              Text {
-                id: appDataWarning
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: Style.space(10)
-                anchors.rightMargin: Style.space(10)
-                text: "This resets the plugin's saved Home Assistant connection, preferences, and local temperature history. It does not reset Home Assistant, its Docker container, any Home Assistant data, or an external server timer/history file."
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-            }
-
             Column {
               visible: root.resetAppConfirming || height > 0.5
               width: parent.width
@@ -3476,16 +3454,45 @@ Panel {
                 NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
               }
 
-              Text {
+              Item {
+                id: resetConfirmWarning
                 width: parent.width
-                text: "Are you sure? Your Home Assistant server and its data will remain untouched."
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                wrapMode: Text.WordWrap
-              }
+                height: root.resetAppConfirming ? resetWarningSurface.implicitHeight : 0
+                implicitHeight: height
+                opacity: root.resetAppConfirming ? 1 : 0
+                visible: opacity > 0.01
+                clip: true
 
+                Behavior on height {
+                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                }
+                Behavior on opacity {
+                  NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                }
+
+                BorderSurface {
+                  id: resetWarningSurface
+                  width: parent.width
+                  implicitHeight: resetAppWarning.implicitHeight + Style.space(18)
+                  color: root.alpha(root.urgent, 0.07)
+                  borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                  radius: root.compactRadius
+
+                  Text {
+                    id: resetAppWarning
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.space(10)
+                    anchors.rightMargin: Style.space(10)
+                    text: "This resets the plugin's saved Home Assistant connection, preferences, and local temperature history. It does not reset Home Assistant, its Docker container, any Home Assistant data, or an external server timer/history file."
+                    color: root.urgent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+              }
             }
 
             Item {
@@ -3770,6 +3777,7 @@ Panel {
                     ]
 
                     Item {
+                      id: uninstallOptionDelegate
                       required property var modelData
                       readonly property bool selected: root.uninstallOptionConfirming
                         && root.uninstallMode === modelData.value
@@ -3782,8 +3790,9 @@ Panel {
                       }
 
                       Button {
+                        id: uninstallOptionButton
                         width: parent.width
-                        height: Style.space(38)
+                        height: parent.selected ? 0 : Style.space(38)
                         visible: opacity > 0.01
                         opacity: parent.selected ? 0 : 1
                         text: modelData.label
@@ -3799,6 +3808,13 @@ Panel {
                         enabled: !root.uninstallBusy
                         tooltipText: "Review what this uninstall scope removes"
                         onClicked: root.chooseUninstallMode(modelData.value)
+
+                        Behavior on height {
+                          NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                        }
+                        Behavior on opacity {
+                          NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                        }
                       }
 
                       Column {
@@ -3815,80 +3831,125 @@ Panel {
                           NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
                         }
 
-                        BorderSurface {
+                        Item {
+                          id: uninstallOptionWarning
                           width: parent.width
-                          implicitHeight: uninstallOptionNotice.implicitHeight + Style.space(18)
-                          color: root.alpha(root.urgent, 0.07)
-                          borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
-                          radius: root.compactRadius
+                          height: parent.parent.selected
+                            ? uninstallOptionWarningSurface.implicitHeight : 0
+                          implicitHeight: height
+                          opacity: parent.parent.selected ? 1 : 0
+                          visible: opacity > 0.01
+                          clip: true
 
-                          Text {
-                            id: uninstallOptionNotice
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.leftMargin: Style.space(10)
-                            anchors.rightMargin: Style.space(10)
-                            text: root.uninstallNotice(modelData.value)
-                            color: root.urgent
-                            font.family: root.fontFamily
-                            font.pixelSize: Style.font.caption
-                            wrapMode: Text.WordWrap
+                          Behavior on height {
+                            NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                          }
+                          Behavior on opacity {
+                            NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                          }
+
+                          BorderSurface {
+                            id: uninstallOptionWarningSurface
+                            width: parent.width
+                            implicitHeight: uninstallOptionNotice.implicitHeight + Style.space(18)
+                            color: root.alpha(root.urgent, 0.07)
+                            borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                            radius: root.compactRadius
+
+                            Text {
+                              id: uninstallOptionNotice
+                              anchors.left: parent.left
+                              anchors.right: parent.right
+                              anchors.verticalCenter: parent.verticalCenter
+                              anchors.leftMargin: Style.space(10)
+                              anchors.rightMargin: Style.space(10)
+                              text: root.uninstallNotice(modelData.value)
+                              color: root.urgent
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.caption
+                              wrapMode: Text.WordWrap
+                            }
                           }
                         }
 
-                        Row {
+                        Item {
+                          id: uninstallOptionConfirmActionArea
                           width: parent.width
-                          spacing: Style.space(6)
+                          height: Style.space(40)
+                          clip: true
 
-                          Button {
-                            width: Style.space(86)
-                            height: Style.space(40)
-                            text: "BACK"
-                            iconText: "←"
-                            iconSize: Style.font.body
-                            fontSize: Style.font.bodySmall
-                            horizontalPadding: Style.space(4)
-                            fontFamily: root.fontFamily
-                            foreground: root.foreground
-                            accent: root.urgent
-                            background: root.alpha(root.foreground, 0.025)
-                            bordered: true
-                            radius: root.compactRadius
-                            enabled: !root.uninstallBusy
-                            tooltipText: "Choose a different uninstall scope"
-                            onClicked: {
-                              root.uninstallOptionConfirming = false
-                              root.uninstallMode = ""
-                              root.uninstallError = ""
+                          Item {
+                            id: uninstallOptionSplitFrame
+                            anchors.fill: parent
+                            clip: true
+                            property real splitProgress: uninstallOptionDelegate.selected ? 1 : 0
+                            readonly property real backWidth: Style.space(86) * splitProgress
+                            readonly property real splitGap: Style.space(8) * splitProgress
+                            visible: opacity > 0.01
+                            opacity: splitProgress
+
+                            Behavior on splitProgress {
+                              NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
                             }
-                          }
 
-                          Button {
-                            width: parent.width - Style.space(86) - parent.spacing
-                            height: Style.space(40)
-                            text: root.uninstallBusy
-                              ? "UNINSTALLING…" : root.uninstallActionLabel()
-                            fontSize: Style.font.bodySmall
-                            fontFamily: root.fontFamily
-                            foreground: Color.popups.background
-                            accent: root.urgent
-                            background: root.urgent
-                            bordered: false
-                            radius: root.compactRadius
-                            enabled: !root.uninstallBusy
-                            tooltipText: "Confirm this uninstall scope"
-                            onClicked: root.startUninstall()
+                            Button {
+                              id: uninstallOptionBackButton
+                              x: 0
+                              width: uninstallOptionSplitFrame.backWidth
+                              height: parent.height
+                              visible: uninstallOptionSplitFrame.splitProgress > 0.02
+                              opacity: Math.min(1, uninstallOptionSplitFrame.splitProgress * 1.5)
+                              clip: true
+                              text: "BACK"
+                              iconText: "←"
+                              iconSize: Style.font.body
+                              fontSize: Style.font.bodySmall
+                              horizontalPadding: Style.space(4)
+                              fontFamily: root.fontFamily
+                              foreground: root.foreground
+                              accent: root.urgent
+                              background: root.alpha(root.foreground, 0.025)
+                              bordered: true
+                              radius: root.compactRadius
+                              enabled: !root.uninstallBusy
+                              tooltipText: "Choose a different uninstall scope"
+                              onClicked: {
+                                root.uninstallOptionConfirming = false
+                                root.uninstallMode = ""
+                                root.uninstallError = ""
+                              }
+                            }
 
-                            LoadingRing {
-                              visible: root.uninstallBusy
-                              anchors.left: parent.left
-                              anchors.leftMargin: Style.space(14)
-                              anchors.verticalCenter: parent.verticalCenter
-                              width: Style.space(16)
-                              height: width
-                              color: Color.popups.background
-                              strokeWidth: Style.space(2)
+                            Button {
+                              id: uninstallOptionConfirmButton
+                              x: uninstallOptionSplitFrame.backWidth + uninstallOptionSplitFrame.splitGap
+                              width: Math.max(0, parent.width - x)
+                              height: parent.height
+                              clip: true
+                              opacity: uninstallOptionSplitFrame.splitProgress
+                              text: root.uninstallBusy
+                                ? "UNINSTALLING…" : root.uninstallActionLabel()
+                              fontSize: Style.font.bodySmall
+                              fontFamily: root.fontFamily
+                              foreground: Color.popups.background
+                              accent: root.urgent
+                              background: root.urgent
+                              bordered: false
+                              radius: root.compactRadius
+                              enabled: !root.uninstallBusy
+                              tooltipText: "Confirm this uninstall scope"
+                              onClicked: root.startUninstall()
+
+                              LoadingRing {
+                                visible: root.uninstallBusy
+                                anchors.left: parent.left
+                                anchors.leftMargin: Style.space(14)
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Style.space(16)
+                                height: width
+                                color: Color.popups.background
+                                strokeWidth: Style.space(2)
+                              }
                             }
                           }
                         }
