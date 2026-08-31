@@ -51,8 +51,6 @@ Panel {
   property bool experimentalKelvinEnabledPrevious: false
   property string barTemperatureMode: "average"
   property string barTemperatureModePrevious: "average"
-  property string barTemperatureEntity: ""
-  property string barTemperatureEntityPrevious: ""
   property var barTemperatureEntities: []
   property var barTemperatureEntitiesPrevious: []
   property bool experimentalHistoryEnabled: false
@@ -824,11 +822,7 @@ Panel {
     var readings = []
     var all = unitReadings.length > 0 ? unitReadings : [reading]
     var mode = String(barTemperatureMode || "average")
-    if (mode === "single") {
-      var single = unitReading(barTemperatureEntity)
-      if (single) readings = [single]
-      else if (all.length > 0) readings = [all[0]]
-    } else if (mode === "selected") {
+    if (mode === "selected") {
       var wanted = Array.isArray(barTemperatureEntities) ? barTemperatureEntities : []
       for (var i = 0; i < all.length; i++) {
         if (wanted.indexOf(String(all[i].entity_id || "")) >= 0) readings.push(all[i])
@@ -1080,11 +1074,9 @@ Panel {
     }
     selectedEntities = normalizeSelectedEntities(parsed.selected_entities, selectedEntity)
     var parsedBarMode = String(parsed.bar_temperature_mode || "average")
-    barTemperatureMode = ["average", "all", "single", "selected"].indexOf(parsedBarMode) >= 0
+    barTemperatureMode = ["average", "all", "selected"].indexOf(parsedBarMode) >= 0
       ? parsedBarMode : "average"
     barTemperatureModePrevious = barTemperatureMode
-    barTemperatureEntity = String(parsed.bar_temperature_entity || "")
-    barTemperatureEntityPrevious = barTemperatureEntity
     barTemperatureEntities = normalizeSelectedEntities(
       parsed.bar_temperature_entities, selectedEntities.length > 0 ? selectedEntities : selectedEntity)
     barTemperatureEntitiesPrevious = barTemperatureEntities.slice()
@@ -1805,8 +1797,6 @@ Panel {
         selectedEntities = []
         barTemperatureMode = "average"
         barTemperatureModePrevious = "average"
-        barTemperatureEntity = ""
-        barTemperatureEntityPrevious = ""
         barTemperatureEntities = []
         barTemperatureEntitiesPrevious = []
         experimentalHistoryEnabled = false
@@ -2551,20 +2541,11 @@ Panel {
   function setBarTemperatureMode(value) {
     if (preferenceProcess.running) return
     var next = String(value || "").toLowerCase()
-    if (["average", "all", "single", "selected"].indexOf(next) < 0
+    if (["average", "all", "selected"].indexOf(next) < 0
         || next === barTemperatureMode) return
     barTemperatureModePrevious = barTemperatureMode
     barTemperatureMode = next
     root.beginPreference("bar_temperature_mode", next)
-  }
-
-  function setBarTemperatureEntity(value) {
-    if (preferenceProcess.running) return
-    var next = String(value || "")
-    if (next === barTemperatureEntity) return
-    barTemperatureEntityPrevious = barTemperatureEntity
-    barTemperatureEntity = next
-    root.beginPreference("bar_temperature_entity", next)
   }
 
   function toggleBarTemperatureEntity(entityId) {
@@ -2767,7 +2748,6 @@ Panel {
     else if (kind === "experimental_kelvin_enabled")
       experimentalKelvinEnabled = experimentalKelvinEnabledPrevious
     else if (kind === "bar_temperature_mode") barTemperatureMode = barTemperatureModePrevious
-    else if (kind === "bar_temperature_entity") barTemperatureEntity = barTemperatureEntityPrevious
     else if (kind === "bar_temperature_entities") barTemperatureEntities = barTemperatureEntitiesPrevious.slice()
     else if (kind === "experimental_history_enabled")
       experimentalHistoryEnabled = experimentalHistoryEnabledPrevious
@@ -2815,11 +2795,10 @@ Panel {
       experimentalKelvinEnabled = value === true
       experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
     } else if (name === "bar_temperature_mode") {
-      barTemperatureMode = String(value || "average")
+      var nextBarMode = String(value || "average")
+      barTemperatureMode = ["average", "all", "selected"].indexOf(nextBarMode) >= 0
+        ? nextBarMode : "average"
       barTemperatureModePrevious = barTemperatureMode
-    } else if (name === "bar_temperature_entity") {
-      barTemperatureEntity = String(value || "")
-      barTemperatureEntityPrevious = barTemperatureEntity
     } else if (name === "bar_temperature_entities") {
       barTemperatureEntities = normalizeSelectedEntities(value, selectedEntity)
       barTemperatureEntitiesPrevious = barTemperatureEntities.slice()
@@ -5177,173 +5156,175 @@ Panel {
               onClicked: root.setMultiUnitEnabled(!root.multiUnitEnabled)
             }
 
-            Column {
-              id: multiAirconOptions
+            BorderSurface {
+              id: multiAirconOptionsCard
               visible: root.multiUnitEnabled || height > 0.5
               width: parent.width
+              implicitHeight: multiAirconOptions.implicitHeight + Style.space(20)
               height: root.multiUnitEnabled ? implicitHeight : 0
               opacity: root.multiUnitEnabled ? 1 : 0
               clip: true
-              spacing: Style.space(7)
+              color: root.alpha(root.accentColor, 0.025)
+              borderSpec: Border.flat(root.alpha(root.accentColor, 0.18), 1)
+              radius: root.compactRadius
 
               Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
               Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-              Toggle {
-                width: parent.width
-                label: "Globally synced controls"
-                description: "Use one remote for every selected air conditioner, including power."
-                checked: root.globalSyncControls
-                enabled: !root.preferenceBusy && root.selectedEntities.length > 1
-                foreground: root.foreground
-                accent: root.controlAccentColor
-                fontFamily: root.fontFamily
-                onClicked: root.setGlobalSyncControls(!root.globalSyncControls)
-              }
-
               Column {
-                visible: (!root.globalSyncControls && root.selectedEntities.length > 1) || height > 0.5
-                width: parent.width
-                height: !root.globalSyncControls && root.selectedEntities.length > 1
-                  ? implicitHeight : 0
-                opacity: !root.globalSyncControls && root.selectedEntities.length > 1 ? 1 : 0
+                id: multiAirconOptions
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                height: root.multiUnitEnabled ? implicitHeight : 0
+                opacity: root.multiUnitEnabled ? 1 : 0
                 clip: true
-                spacing: Style.space(5)
+                spacing: Style.space(7)
 
-                Behavior on height {
-                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
-                }
-                Behavior on opacity {
-                  NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
-                }
+                Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
                 Toggle {
                   width: parent.width
-                  label: "Sync non-power controls"
-                  description: "Recommended · sync temperature, mode, and fan while each AC keeps its own power button."
-                  checked: root.syncNonPowerControls
-                  enabled: !root.preferenceBusy
+                  label: "Globally synced controls"
+                  description: "Use one remote for every selected air conditioner, including power."
+                  checked: root.globalSyncControls
+                  enabled: !root.preferenceBusy && root.selectedEntities.length > 1
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
-                  onClicked: root.setSyncNonPowerControls(!root.syncNonPowerControls)
+                  borderSpec: Border.none()
+                  onClicked: root.setGlobalSyncControls(!root.globalSyncControls)
                 }
-              }
 
-              Text {
-                width: parent.width
-                text: root.selectedEntities.length > 1
-                  ? (root.globalSyncControls
-                    ? "The main remote controls all selected ACs together."
-                    : root.syncNonPowerControls
-                      ? "Temperature, mode, and fan stay synced; each AC gets its own power button."
-                      : "The main panel will show one compact remote per selected AC.")
-                  : "Add another air conditioner from the main panel to unlock sync choices."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
+                Column {
+                  visible: (!root.globalSyncControls && root.selectedEntities.length > 1) || height > 0.5
+                  width: parent.width
+                  height: !root.globalSyncControls && root.selectedEntities.length > 1
+                    ? implicitHeight : 0
+                  opacity: !root.globalSyncControls && root.selectedEntities.length > 1 ? 1 : 0
+                  clip: true
+                  spacing: Style.space(5)
 
-              Text {
-                width: parent.width
-                text: "BAR AMBIENT TEMPERATURE"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 0.8
-              }
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
 
-              Text {
-                width: parent.width
-                text: "Choose the summary shown in the Omarchy bar."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-
-              Row {
-                id: barTemperatureChoices
-                width: parent.width
-                spacing: Style.space(5)
-
-                Repeater {
-                  model: [
-                    { value: "average", label: "AVG" },
-                    { value: "all", label: "ALL" },
-                    { value: "single", label: "CURRENT" },
-                    { value: "selected", label: "SELECT" },
-                  ]
-
-                  Button {
-                    required property var modelData
-                    width: (barTemperatureChoices.width
-                      - barTemperatureChoices.spacing * 3) / 4
-                    height: Style.space(32)
-                    text: modelData.label
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.space(2)
+                  Toggle {
+                    width: parent.width
+                    label: "Sync non-power controls"
+                    description: "Recommended · sync temperature, mode, and fan while each AC keeps its own power button."
+                    checked: root.syncNonPowerControls
+                    enabled: !root.preferenceBusy
                     foreground: root.foreground
                     accent: root.controlAccentColor
-                    background: root.alpha(root.foreground, 0.025)
-                    bordered: true
-                    selected: root.barTemperatureMode === modelData.value
-                    enabled: !root.preferenceBusy
-                    radius: root.compactRadius
-                    tooltipText: modelData.value === "average"
-                      ? "Average the selected ambient temperatures"
-                      : modelData.value === "all" ? "Show all selected ambient temperatures"
-                      : modelData.value === "single" ? "Show one selected ambient temperature"
-                      : "Choose which selected ambient temperatures appear"
-                    onClicked: root.setBarTemperatureMode(modelData.value)
+                    fontFamily: root.fontFamily
+                    borderSpec: Border.none()
+                    onClicked: root.setSyncNonPowerControls(!root.syncNonPowerControls)
                   }
                 }
-              }
 
-              AcDropdown {
-                visible: root.barTemperatureMode === "single"
-                width: parent.width
-                label: "BAR AIR CONDITIONER"
-                options: root.selectedEntityDropdownOptions
-                value: root.barTemperatureEntity
-                foreground: root.foreground
-                background: Color.popups.background
-                popupBorder: Color.popups.border
-                accent: root.controlAccentColor
-                fontFamily: root.fontFamily
-                controlRadius: root.compactRadius
-                enabled: !root.preferenceBusy
-                onChanged: function(value) { root.setBarTemperatureEntity(value) }
-              }
+                Text {
+                  width: parent.width
+                  text: root.selectedEntities.length > 1
+                    ? (root.globalSyncControls
+                      ? "The main remote controls all selected ACs together."
+                      : root.syncNonPowerControls
+                        ? "Temperature, mode, and fan stay synced; each AC gets its own power button."
+                        : "The main panel will show one compact remote per selected AC.")
+                    : "Add another air conditioner from the main panel to unlock sync choices."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
 
-              Column {
-                visible: root.barTemperatureMode === "selected"
-                width: parent.width
-                spacing: Style.space(5)
+                Text {
+                  width: parent.width
+                  text: "BAR AMBIENT TEMPERATURE"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
 
-                Repeater {
-                  model: root.selectedEntities
+                Text {
+                  width: parent.width
+                  text: "Choose the summary shown in the Omarchy bar."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
 
-                  Button {
-                    required property var modelData
-                    width: parent.width
-                    height: Style.space(32)
-                    text: (root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? "✓  " : "○  ")
-                      + root.entityDisplayName(modelData)
-                    fontSize: Style.font.caption
-                    leftAlign: true
-                    horizontalPadding: Style.space(10)
-                    foreground: root.foreground
-                    accent: root.controlAccentColor
-                    background: root.alpha(root.accentColor,
-                      root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? 0.10 : 0.025)
-                    bordered: true
-                    selected: root.barTemperatureEntities.indexOf(String(modelData)) >= 0
-                    enabled: !root.preferenceBusy
-                    radius: root.compactRadius
-                    onClicked: root.toggleBarTemperatureEntity(String(modelData))
+                Row {
+                  id: barTemperatureChoices
+                  width: parent.width
+                  spacing: Style.space(5)
+
+                  Repeater {
+                    model: [
+                      { value: "average", label: "AVG" },
+                      { value: "all", label: "ALL" },
+                      { value: "selected", label: "SELECT" },
+                    ]
+
+                    Button {
+                      required property var modelData
+                      width: (barTemperatureChoices.width
+                        - barTemperatureChoices.spacing * 2) / 3
+                      height: Style.space(32)
+                      text: modelData.label
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.space(2)
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      background: root.alpha(root.foreground, 0.025)
+                      bordered: true
+                      selected: root.barTemperatureMode === modelData.value
+                      enabled: !root.preferenceBusy
+                      radius: root.compactRadius
+                      tooltipText: modelData.value === "average"
+                        ? "Average the selected ambient temperatures"
+                        : modelData.value === "all" ? "Show all selected ambient temperatures"
+                        : "Choose which selected ambient temperatures appear"
+                      onClicked: root.setBarTemperatureMode(modelData.value)
+                    }
+                  }
+                }
+
+                Column {
+                  visible: root.barTemperatureMode === "selected"
+                  width: parent.width
+                  spacing: Style.space(5)
+
+                  Repeater {
+                    model: root.selectedEntities
+
+                    Button {
+                      required property var modelData
+                      width: parent.width
+                      height: Style.space(32)
+                      text: (root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? "✓  " : "○  ")
+                        + root.entityDisplayName(modelData)
+                      fontSize: Style.font.caption
+                      leftAlign: true
+                      horizontalPadding: Style.space(10)
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      background: root.alpha(root.accentColor,
+                        root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? 0.10 : 0.025)
+                      bordered: true
+                      selected: root.barTemperatureEntities.indexOf(String(modelData)) >= 0
+                      enabled: !root.preferenceBusy
+                      radius: root.compactRadius
+                      onClicked: root.toggleBarTemperatureEntity(String(modelData))
+                    }
                   }
                 }
               }

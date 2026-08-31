@@ -38,6 +38,11 @@ class FakeResponse:
 
 
 class HelperTests(unittest.TestCase):
+    def test_removed_single_bar_temperature_mode_migrates_to_average(self):
+        self.assertEqual(helper.bar_temperature_mode("single"), "average")
+        self.assertEqual(helper.bar_temperature_mode("average"), "average")
+        self.assertEqual(helper.bar_temperature_mode("selected"), "selected")
+
     def test_normalize_url_accepts_host_port_and_strips_api_suffix(self):
         self.assertEqual(
             helper.normalize_url("homeassistant.local:8123/api/"),
@@ -719,6 +724,13 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn('text: "EXTRA CUSTOMISATIONS"', panel)
         self.assertNotIn("Adjust the plugin's accent and visual finish.", panel)
         self.assertIn('label: "Extra customisations"', panel)
+        self.assertIn("id: multiAirconOptionsCard", panel)
+        self.assertIn("implicitHeight: multiAirconOptions.implicitHeight + Style.space(20)", panel)
+        self.assertIn("borderSpec: Border.none()", panel)
+        self.assertIn("- barTemperatureChoices.spacing * 2) / 3", panel)
+        self.assertNotIn('label: "CURRENT"', panel)
+        self.assertNotIn('{ value: "single"', panel)
+        self.assertNotIn("barTemperatureEntity", panel)
         self.assertIn("property bool showClimateControls: true", panel)
         self.assertIn("showClimateControls: root.showClimateControls", panel)
         self.assertIn("root.setShowClimateControlsEnabled(!root.showClimateControls)", panel)

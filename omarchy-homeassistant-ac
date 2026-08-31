@@ -148,7 +148,11 @@ def selected_entity_ids(value: Any, fallback: Any = "") -> list[str]:
 
 def bar_temperature_mode(value: Any) -> str:
     text = str(value or "").strip().lower()
-    return text if text in {"average", "all", "single", "selected"} else "average"
+    # The former single/current mode was removed from the UI. Treat old saved
+    # values as the default average instead of leaving the bar in a hidden mode.
+    if text == "single":
+        return "average"
+    return text if text in {"average", "all", "selected"} else "average"
 
 
 def bounded_preference(value: Any, minimum: float, maximum: float, default: float) -> float:
@@ -195,7 +199,6 @@ def appearance_color_map(value: Any) -> dict[str, str]:
 def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
     selected = selected_entity_ids(config.get("selected_entities"), config.get("entity_id"))
     display_entities = selected_entity_ids(config.get("bar_temperature_entities"), selected)
-    single_entity = climate_entity_id(config.get("bar_temperature_entity"))
     return {
         "multi_unit_enabled": preference_enabled(config.get("multi_unit_enabled")),
         "global_sync_controls": preference_enabled(config.get("global_sync_controls", True)),
@@ -216,7 +219,6 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "selected_entities": selected,
         "bar_temperature_mode": bar_temperature_mode(config.get("bar_temperature_mode")),
-        "bar_temperature_entity": single_entity,
         "bar_temperature_entities": display_entities,
         "experimental_history_enabled": preference_enabled(config.get("experimental_history_enabled")),
         "custom_appearance_enabled": preference_enabled(config.get("custom_appearance_enabled")),
@@ -1061,7 +1063,6 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "experimental_kelvin_enabled": previous_experimental["experimental_kelvin_enabled"],
         "selected_entities": selected_ids,
         "bar_temperature_mode": previous_experimental["bar_temperature_mode"],
-        "bar_temperature_entity": previous_experimental["bar_temperature_entity"],
         "bar_temperature_entities": previous_experimental["bar_temperature_entities"],
         "experimental_history_enabled": previous_experimental["experimental_history_enabled"],
         "custom_appearance_enabled": previous_experimental["custom_appearance_enabled"],
@@ -1535,14 +1536,9 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             config["history_hours"] = 24
             config["history_custom"] = False
     elif name == "bar_temperature_mode":
-        if value_text.lower() not in {"average", "all", "single", "selected"}:
-            return fail("Bar temperature mode must be average, all, single, or selected")
+        if value_text.lower() not in {"average", "all", "selected"}:
+            return fail("Bar temperature mode must be average, all, or selected")
         value = value_text.lower()
-        config[name] = value
-    elif name == "bar_temperature_entity":
-        value = climate_entity_id(value_text)
-        if value_text and not value:
-            return fail("The bar temperature entity must look like climate.room_name")
         config[name] = value
     elif name == "bar_temperature_entities":
         value = selected_entity_ids(value_text)
