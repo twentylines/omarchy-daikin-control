@@ -80,6 +80,6 @@ if ! systemctl --user start omarchy-homeassistant-ac-history.service; then
 fi
 
 echo "External Home Assistant history timer installed for $USER."
-echo "It records one climate temperature sample per minute on this host."
-echo "History file: the owner-selected path in $config_path (mode 600)."
+echo "It records the selected climate temperatures once per minute on this host."
+echo "The logger keeps up to 31 days of samples in the owner-selected path (mode 600)."
 echo "No sudo, package installation, open port, telemetry, or Home Assistant control call was used."

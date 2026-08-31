@@ -80,9 +80,9 @@ BarWidget {
     fixedWidth: root.vertical ? root.barSize : -1
     horizontalMargin: 0
     implicitWidth: root.vertical ? root.barSize : Math.max(Style.bar.iconSlot, barContent.implicitWidth)
-    active: panelLoader.item ? panelLoader.item.isOn : false
+    active: panelLoader.item ? panelLoader.item.barIsOn : false
     tooltipText: panelLoader.item ? panelLoader.item.tooltip : "Daikin Air · click to connect"
-    activeColor: Color.accent
+    activeColor: panelLoader.item ? panelLoader.item.accentColor : Color.accent
 
     Row {
       id: barContent
@@ -121,7 +121,7 @@ BarWidget {
       Row {
         id: activeValues
         visible: !root.vertical && !root.powerPending
-          && (panelLoader.item ? panelLoader.item.connected && panelLoader.item.isOn : false)
+          && (panelLoader.item ? panelLoader.item.connected && panelLoader.item.barIsOn : false)
         height: Style.bar.iconCanvas
         // Explicit positioner spacing keeps the values readable without
         // relying on Unicode or normal spaces inside a Text item.
@@ -131,7 +131,7 @@ BarWidget {
           visible: panelLoader.item ? panelLoader.item.showAmbientOnBar : true
           width: implicitWidth
           height: Style.bar.iconCanvas
-          text: panelLoader.item ? panelLoader.item.ambientText : ""
+          text: panelLoader.item ? panelLoader.item.barAmbientText : ""
           color: button.foreground
           font.family: button.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -168,14 +168,14 @@ BarWidget {
       Row {
         id: offValues
         visible: !root.vertical && !root.powerPending
-          && (panelLoader.item ? panelLoader.item.connected && !panelLoader.item.isOn : false)
+          && (panelLoader.item ? panelLoader.item.connected && !panelLoader.item.barIsOn : false)
         height: Style.bar.iconCanvas
         spacing: Style.spacing.lg
 
         Text {
           width: implicitWidth
           height: Style.bar.iconCanvas
-          text: panelLoader.item ? panelLoader.item.ambientText : ""
+          text: panelLoader.item ? panelLoader.item.barAmbientText : ""
           color: button.foreground
           font.family: button.fontFamily
           font.pixelSize: Style.font.bodySmall

@@ -2,9 +2,10 @@
 """Record one Home Assistant ambient temperature sample for the AC plugin.
 
 This is a single-purpose, one-shot sampler copied to the external host that
-runs Home Assistant. It performs one authenticated GET for one climate state,
-writes one owner-only JSON file, and exits. It deliberately uses only Python's
-standard library so it can run on a small Linux server without extra packages.
+runs Home Assistant. It performs authenticated GET requests for the selected
+climate states, writes one owner-only JSON file, and exits. It deliberately
+uses only Python's standard library so it can run on a small Linux server
+without extra packages.
 
 It does not install packages, open ports, call Home Assistant service/control
 endpoints, or send telemetry. A separate user-owned systemd timer schedules it.
@@ -33,8 +34,10 @@ HISTORY_PATH = (
     / "omarchy/homeassistant-ac-temperature.json"
 )
 HISTORY_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_./~_-]+$")
-RETENTION_SECONDS = 24 * 60 * 60
-MAX_SAMPLES = 6000
+MAX_HISTORY_HOURS = 31 * 24
+RETENTION_SECONDS = MAX_HISTORY_HOURS * 60 * 60
+MAX_SAMPLES = 50_000
+CLIMATE_ENTITY_PATTERN = re.compile(r"^climate\.[A-Za-z0-9_-]+$")
 
 
 def fail(message: str) -> int:
@@ -81,6 +84,18 @@ def load_config() -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("the logger config must be a JSON object")
     return value
+
+
+def configured_entity_ids(config: dict[str, object]) -> list[str]:
+    raw = config.get("entity_ids")
+    items = raw if isinstance(raw, list) else [config.get("entity_id")]
+    result: list[str] = []
+    for item in items:
+        entity_id = str(item or "").strip()
+        if not CLIMATE_ENTITY_PATTERN.fullmatch(entity_id) or entity_id in result:
+            continue
+        result.append(entity_id)
+    return result
 
 
 def configured_history_path(value: object) -> Path:
@@ -183,24 +198,38 @@ def record_once() -> None:
     config = load_config()
     url = normalize_url(config.get("url"))
     token = str(config.get("token") or "").strip()
-    entity_id = str(config.get("entity_id") or "").strip()
     history_path = configured_history_path(config.get("history_path"))
-    if not token or not entity_id.startswith("climate."):
+    entity_ids = configured_entity_ids(config)
+    if not token or not entity_ids:
         raise ValueError("the logger config is missing a token or climate entity")
-    state = api_state(url, token, entity_id)
-    attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
-    ambient = number(attrs.get("current_temperature"))
-    if ambient is None:
-        return
 
     now = time.time()
     history = prune(load_history(history_path), now)
-    samples = history.setdefault(entity_id, [])
-    sample = {"timestamp": int(now), "temperature": ambient, "unit": unit(attrs.get("temperature_unit"))}
-    if samples and int(samples[-1]["timestamp"]) >= int(now) - 45:
-        samples[-1] = sample
-    else:
-        samples.append(sample)
+    recorded = 0
+    errors: list[str] = []
+    for entity_id in entity_ids:
+        try:
+            state = api_state(url, token, entity_id)
+        except ValueError as exc:
+            errors.append(f"{entity_id}: {exc}")
+            continue
+        attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
+        ambient = number(attrs.get("current_temperature"))
+        if ambient is None:
+            continue
+        samples = history.setdefault(entity_id, [])
+        sample = {
+            "timestamp": int(now),
+            "temperature": ambient,
+            "unit": unit(attrs.get("temperature_unit")),
+        }
+        if samples and int(samples[-1]["timestamp"]) >= int(now) - 45:
+            samples[-1] = sample
+        else:
+            samples.append(sample)
+        recorded += 1
+    if not recorded and errors:
+        raise ValueError("; ".join(errors[:2]))
     save_history(prune(history, now), history_path)
 
 

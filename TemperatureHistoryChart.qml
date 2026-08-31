@@ -198,6 +198,8 @@ Item {
             var bottom = Math.max(top + Style.space(32), height - Style.space(40))
             var plotWidth = right - left
             var plotHeight = bottom - top
+            var longRange = Number(root.rangeHours) > 72
+            var labelCount = longRange ? 5 : 3
 
             context.fillStyle = root.alpha(root.foreground, 0.58)
             context.lineWidth = 1
@@ -214,17 +216,17 @@ Item {
               drawLabel(context, root.formatTemperature(axisValue), left - Style.space(12), y, "right")
             }
 
-            for (var xIndex = 0; xIndex < 3; xIndex++) {
-              var xRatio = xIndex / 2
+            for (var xIndex = 0; xIndex < labelCount; xIndex++) {
+              var xRatio = xIndex / (labelCount - 1)
               var x = left + plotWidth * xRatio
               context.beginPath()
               context.moveTo(x, top)
               context.lineTo(x, bottom)
               context.stroke()
               var axisTimestamp = start + rangeSeconds * xRatio
-              var axisAlign = xIndex === 0 ? "left" : (xIndex === 2 ? "right" : "center")
-              if (xIndex > 0) {
-                var previousTimestamp = start + rangeSeconds * ((xIndex - 1) / 2)
+              var axisAlign = xIndex === 0 ? "left" : (xIndex === labelCount - 1 ? "right" : "center")
+              if (xIndex > 0 && !longRange) {
+                var previousTimestamp = start + rangeSeconds * ((xIndex - 1) / (labelCount - 1))
                 if (root.dayKey(axisTimestamp) !== root.dayKey(previousTimestamp)) {
                   context.font = Math.max(8, Style.font.caption - 2) + "px " + fontFamily
                   context.fillStyle = root.alpha(root.foreground, 0.48)
@@ -233,7 +235,8 @@ Item {
               }
               context.font = Style.font.caption + "px " + fontFamily
               context.fillStyle = root.alpha(root.foreground, 0.70)
-              drawLabel(context, root.formatTime(axisTimestamp), x, height - Style.space(11), axisAlign)
+              drawLabel(context, longRange ? root.formatDay(axisTimestamp) : root.formatTime(axisTimestamp),
+                x, height - Style.space(11), axisAlign)
             }
 
             if (visible.length === 0) {

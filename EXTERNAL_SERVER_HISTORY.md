@@ -114,10 +114,16 @@ path with your values:
   "url": "http://127.0.0.1:8123",
   "token": "YOUR_HOME_ASSISTANT_LONG_LIVED_TOKEN",
   "entity_id": "climate.your_entity",
+  "entity_ids": ["climate.your_entity"],
   "interval_seconds": 60,
-  "history_path": "~/.local/state/omarchy/homeassistant-ac-temperature.json"
+  "history_path": "~/.local/state/omarchy/homeassistant-ac-temperature.json",
+  "retention_hours": 744
 }
 ```
+
+The plugin-generated config includes every selected climate entity in
+`entity_ids`. Add more available `climate.*` IDs to that list only when you
+also want the external logger to record them.
 
 Then run the supplied installer on the external host:
 
@@ -152,10 +158,14 @@ It also creates:
   read-only sample job.
 - `~/.config/systemd/user/omarchy-homeassistant-ac-history.timer` — one sample
   per minute.
-- The owner-only 24-hour JSON history file at the path selected in Preferences.
+- The owner-only 31-day JSON history file at the path selected in Preferences.
 
-The logger reads one climate state from the local Home Assistant API and
-writes the chart history. It does not send AC control commands.
+The logger reads the selected climate states from the local Home Assistant API
+and writes their chart history. It does not send AC control commands.
+
+If the selected AC list changes, reinstall the timer from the plugin. The
+installer updates the external config with the new `entity_ids` list without
+creating another timer.
 
 ## Keep the SSH key
 

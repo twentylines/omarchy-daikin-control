@@ -65,19 +65,20 @@ the small settings button in the hero card. Settings groups connection and
 local-server setup together; **Preferences** can show supported climate modes
 and fan speeds, choose whether the bar shows ambient temperature, target
 temperature, or both, and enable the optional Ambient Temperature History
-chart. **Maintenance** contains project help, reset controls, and uninstall
-options.
+chart. **Experimental** contains the opt-in multi-aircon panel, extended
+history ranges, and custom appearance controls. **Maintenance** contains
+project help, reset controls, and uninstall options.
 
-The chart keeps at most the latest 24 hours of ambient readings. By default it
-is a private local log on this PC, so sleep, shutdown, network outages, and
-other gaps remain empty. In **Settings → Preferences**, switch **History
-Source** to **EXTERNAL SERVER** to install a server-side logger over SSH. The
-external server must be the same host that runs Home Assistant; that is the
-only host whose local API the logger can read. The chart then reads only the
-external file and labels itself with that host's address; it never falls back
-to the local log. A user systemd timer records once per minute while the
-external Home Assistant host is on, so it can continue while this PC sleeps,
-shuts down, or restarts.
+The chart keeps up to 31 days of ambient readings. By default it is a private
+local log on this PC, so sleep, shutdown, network outages, and other gaps
+remain empty. In **Settings → Preferences**, switch **History Source** to
+**EXTERNAL SERVER** to install a server-side logger over SSH. The external
+server must be the same host that runs Home Assistant; that is the only host
+whose local API the logger can read. The chart then reads only the external
+file and labels itself with that host's address; it never falls back to the
+local log. A user systemd timer records once per minute while the external
+Home Assistant host is on, so it can continue while this PC sleeps, shuts
+down, or restarts.
 
 Enter the SSH target (for example `sai@192.168.1.20`), the SSH port, and the
 Home Assistant URL as seen from that same external host (usually
@@ -100,9 +101,23 @@ endpoints. The optional `loginctl enable-linger` step is best-effort so the
 user timer can run while nobody is logged in; it does not request administrator
 approval. Review the source before running it.
 
-The chart can show the latest 1, 3, 6, 12, or 24 hours, or a custom range
-between 1 and 24 hours. Its time axis stays compact and adds a small date
-marker only when the range crosses into another day.
+The chart can show the latest 1, 3, 6, 12, or 24 hours. **Experimental →
+Extended chart history** unlocks 7-day and 30-day presets plus custom ranges
+up to 744 hours. Longer ranges use date labels automatically. An always-on
+external logger on the Home Assistant host is recommended for long recordings.
+
+### Experimental features
+
+The multi-aircon panel lets you add several available climate entities below
+the main selector. **Globally synced controls** is enabled by default, so one
+change is sent to every selected AC. Turning it off shows a compact remote for
+each selected unit. The bar ambient summary can show the average, all values,
+one unit, or a chosen subset.
+
+The custom appearance controls replace the Omarchy accent only while enabled.
+They include a color picker/hex value and typed values for transparency,
+softness, and corner radius. The compositor still controls system-wide blur;
+the plugin's softness value only changes its own surface treatment.
 
 ### Optional local Home Assistant server
 
@@ -174,7 +189,7 @@ journalctl --user -u omarchy-homeassistant-ac-history.service
 The uninstall flow sends `uninstall-remote-history.sh` over the same SSH
 connection only when **REMOVE APP + LOGGER** or **REMOVE EVERYTHING** is
 confirmed. It stops the matching user timer and removes only the named logger,
-installer, config, service, timer, and 24-hour history file. If that external
+installer, config, service, timer, and 31-day history file. If that external
 installation is absent, cleanup succeeds without changing anything on the
 server.
 
