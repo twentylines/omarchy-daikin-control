@@ -16,13 +16,16 @@ Item {
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
   property bool powerCancelEnabled: true
+  property bool showClimateControls: true
 
   readonly property bool connected: climate && String(climate.entity_id || "") !== ""
-  readonly property bool powerPending: String(localState.power || "") !== ""
+  readonly property bool hasLocalPower: String(localState.power || "") !== ""
+  readonly property bool powerPending: hasLocalPower && localState.powerTimedOut !== true
   readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
   readonly property bool powerCanCancel: localState.powerCanCancel === true
+    && localState.powerTimedOut !== true
   readonly property bool actualIsOn: connected && String(climate.state || "").toLowerCase() !== "off"
-  readonly property bool isOn: connected && (powerPending ? localPowerOn : actualIsOn)
+  readonly property bool isOn: connected && (hasLocalPower ? localPowerOn : actualIsOn)
   readonly property bool hasLocalTarget: localState.target !== undefined
     && isFinite(Number(localState.target))
   readonly property real targetValue: hasLocalTarget ? Number(localState.target) : Number(climate.target)
@@ -159,115 +162,140 @@ Item {
         }
       }
 
-      Row {
+      Item {
+        id: climateControls
         width: parent.width
-        height: Style.space(34)
-        spacing: Style.space(6)
+        implicitHeight: root.showClimateControls ? climateControlsColumn.implicitHeight : 0
+        visible: root.showClimateControls || height > 0.5
+        height: implicitHeight
+        opacity: root.showClimateControls ? 1 : 0
+        clip: true
 
-        Text {
-          width: Style.space(50)
-          height: parent.height
-          text: "TARGET"
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          verticalAlignment: Text.AlignVCenter
+        Behavior on height {
+          NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
         }
+        Behavior on opacity { NumberAnimation { duration: 140 } }
 
-        Button {
-          width: Style.space(28)
-          height: width
-          text: "−"
-          fontSize: Style.font.body
-          horizontalPadding: 0
-          verticalPadding: 0
-          fontFamily: root.fontFamily
-          foreground: root.accent
-          accent: root.accent
-          background: root.alpha(root.accent, 0.08)
-          bordered: true
-          radius: width / 2
-          enabled: root.enabled && root.isOn && !root.powerPending
-          tooltipText: "Lower this target temperature"
-          onClicked: {
-            var next = root.adjustedTarget(-1)
-            if (next !== null) root.temperatureRequested(next)
+        Column {
+          id: climateControlsColumn
+          width: parent.width
+          spacing: Style.space(7)
+
+          Row {
+            width: parent.width
+            height: Style.space(34)
+            spacing: Style.space(6)
+
+            Text {
+              width: Style.space(50)
+              height: parent.height
+              text: "TARGET"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              verticalAlignment: Text.AlignVCenter
+            }
+
+            Button {
+              width: Style.space(28)
+              height: width
+              text: "−"
+              fontSize: Style.font.body
+              horizontalPadding: 0
+              verticalPadding: 0
+              fontFamily: root.fontFamily
+              foreground: root.accent
+              accent: root.accent
+              background: root.alpha(root.accent, 0.08)
+              bordered: true
+              radius: width / 2
+              enabled: root.enabled && root.isOn && !root.powerPending
+              tooltipText: "Lower this target temperature"
+              onClicked: {
+                var next = root.adjustedTarget(-1)
+                if (next !== null) root.temperatureRequested(next)
+              }
+            }
+
+            Text {
+              width: Style.space(64)
+              height: parent.height
+              text: root.isOn ? root.formatTemperature(root.targetValue) : "OFF"
+              color: root.isOn ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              horizontalAlignment: Text.AlignHCenter
+              verticalAlignment: Text.AlignVCenter
+            }
+
+            Button {
+              width: Style.space(28)
+              height: width
+              text: "+"
+              fontSize: Style.font.body
+              horizontalPadding: 0
+              verticalPadding: 0
+              fontFamily: root.fontFamily
+              foreground: root.accent
+              accent: root.accent
+              background: root.alpha(root.accent, 0.08)
+              bordered: true
+              radius: width / 2
+              enabled: root.enabled && root.isOn && !root.powerPending
+              tooltipText: "Raise this target temperature"
+              onClicked: {
+                var next = root.adjustedTarget(1)
+                if (next !== null) root.temperatureRequested(next)
+              }
+            }
+
+            Item {
+              width: Math.max(0, parent.width - Style.space(50) - Style.space(28)
+                - Style.space(64) - Style.space(28) - parent.spacing * 4)
+              height: 1
+            }
           }
-        }
 
-        Text {
-          width: Style.space(64)
-          height: parent.height
-          text: root.isOn ? root.formatTemperature(root.targetValue) : "OFF"
-          color: root.isOn ? root.foreground : root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          font.bold: true
-          horizontalAlignment: Text.AlignHCenter
-          verticalAlignment: Text.AlignVCenter
-        }
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
 
-        Button {
-          width: Style.space(28)
-          height: width
-          text: "+"
-          fontSize: Style.font.body
-          horizontalPadding: 0
-          verticalPadding: 0
-          fontFamily: root.fontFamily
-          foreground: root.accent
-          accent: root.accent
-          background: root.alpha(root.accent, 0.08)
-          bordered: true
-          radius: width / 2
-          enabled: root.enabled && root.isOn && !root.powerPending
-          tooltipText: "Raise this target temperature"
-          onClicked: {
-            var next = root.adjustedTarget(1)
-            if (next !== null) root.temperatureRequested(next)
+            AcDropdown {
+              visible: root.modeOptions.length > 0
+              width: root.modeOptions.length > 0
+                ? (root.fanModeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
+              label: "MODE"
+              options: root.modeDropdownOptions
+              value: root.activeMode
+              foreground: root.foreground
+              background: Color.popups.background
+              popupBorder: Color.popups.border
+              accent: root.accent
+              fontFamily: root.fontFamily
+              controlRadius: root.panelRadius
+              enabled: root.enabled && root.isOn && !root.powerPending
+              onChanged: function(value) { if (value) root.modeRequested(value) }
+            }
+
+            AcDropdown {
+              visible: root.fanModeOptions.length > 0
+              width: root.fanModeOptions.length > 0
+                ? (root.modeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
+              label: "FAN SPEED"
+              options: root.fanModeDropdownOptions
+              value: root.activeFanMode
+              foreground: root.foreground
+              background: Color.popups.background
+              popupBorder: Color.popups.border
+              accent: root.accent
+              fontFamily: root.fontFamily
+              controlRadius: root.panelRadius
+              enabled: root.enabled && root.isOn && !root.powerPending
+              onChanged: function(value) { if (value) root.fanModeRequested(value) }
+            }
           }
-        }
-
-        Item { width: Math.max(0, parent.width - Style.space(50) - Style.space(28) - Style.space(64) - Style.space(28) - parent.spacing * 4); height: 1 }
-      }
-
-      Row {
-        width: parent.width
-        spacing: Style.space(6)
-
-        AcDropdown {
-          visible: root.modeOptions.length > 0
-          width: root.modeOptions.length > 0
-            ? (root.fanModeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
-          label: "MODE"
-          options: root.modeDropdownOptions
-          value: root.activeMode
-          foreground: root.foreground
-          background: Color.popups.background
-          popupBorder: Color.popups.border
-          accent: root.accent
-          fontFamily: root.fontFamily
-          controlRadius: root.panelRadius
-          enabled: root.enabled && root.isOn && !root.powerPending
-          onChanged: function(value) { if (value) root.modeRequested(value) }
-        }
-
-        AcDropdown {
-          visible: root.fanModeOptions.length > 0
-          width: root.fanModeOptions.length > 0
-            ? (root.modeOptions.length > 0 ? (parent.width - parent.spacing) / 2 : parent.width) : 0
-          label: "FAN SPEED"
-          options: root.fanModeDropdownOptions
-          value: root.activeFanMode
-          foreground: root.foreground
-          background: Color.popups.background
-          popupBorder: Color.popups.border
-          accent: root.accent
-          fontFamily: root.fontFamily
-          controlRadius: root.panelRadius
-          enabled: root.enabled && root.isOn && !root.powerPending
-          onChanged: function(value) { if (value) root.fanModeRequested(value) }
         }
       }
     }

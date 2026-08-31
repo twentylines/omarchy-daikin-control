@@ -19,6 +19,9 @@ Item {
   property real panelRadius: Style.cornerRadius
   property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
+  property bool connected: false
+  property var liveTemperature: null
+  property color liveColor: "#79B889"
 
   implicitHeight: Style.space(248)
   height: implicitHeight
@@ -162,6 +165,8 @@ Item {
             var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
             var start = now - rangeSeconds
             var visible = []
+            var liveValid = root.connected && isFinite(Number(root.liveTemperature))
+            var liveTemperature = Number(root.liveTemperature)
 
             for (var i = 0; i < values.length; i++) {
               if (values[i].timestamp >= start && values[i].timestamp <= now + 300)
@@ -174,7 +179,11 @@ Item {
               minValue = Math.min(minValue, visible[j].temperature)
               maxValue = Math.max(maxValue, visible[j].temperature)
             }
-            if (visible.length === 0) {
+            if (liveValid) {
+              minValue = Math.min(minValue, liveTemperature)
+              maxValue = Math.max(maxValue, liveTemperature)
+            }
+            if (visible.length === 0 && !liveValid) {
               minValue = 0
               maxValue = 1
             } else if (Math.abs(maxValue - minValue) < 0.1) {
@@ -239,7 +248,7 @@ Item {
                 x, height - Style.space(11), axisAlign)
             }
 
-            if (visible.length === 0) {
+            if (visible.length === 0 && !liveValid) {
               context.fillStyle = root.alpha(root.foreground, 0.54)
               context.textAlign = "center"
               context.textBaseline = "middle"
@@ -282,29 +291,46 @@ Item {
               context.stroke()
             }
 
-            var gapLimit = Math.max(10 * 60, rangeSeconds * 0.04)
-            var segment = [visible[0]]
-            for (var pointIndex = 1; pointIndex < visible.length; pointIndex++) {
-              if (visible[pointIndex].timestamp - visible[pointIndex - 1].timestamp > gapLimit) {
-                drawSegment(segment)
-                segment = []
+            if (visible.length > 0) {
+              var gapLimit = Math.max(10 * 60, rangeSeconds * 0.04)
+              var segment = [visible[0]]
+              for (var pointIndex = 1; pointIndex < visible.length; pointIndex++) {
+                if (visible[pointIndex].timestamp - visible[pointIndex - 1].timestamp > gapLimit) {
+                  drawSegment(segment)
+                  segment = []
+                }
+                segment.push(visible[pointIndex])
               }
-              segment.push(visible[pointIndex])
-            }
-            drawSegment(segment)
+              drawSegment(segment)
 
-            var latest = visible[visible.length - 1]
-            var latestX = pointX(latest)
-            var latestY = pointY(latest)
-            context.beginPath()
-            context.arc(latestX, latestY, Style.space(4), 0, Math.PI * 2)
-            context.fillStyle = root.accent
-            context.fill()
-            context.beginPath()
-            context.arc(latestX, latestY, Style.space(7), 0, Math.PI * 2)
-            context.strokeStyle = root.alpha(root.accent, 0.28)
-            context.lineWidth = Style.space(2)
-            context.stroke()
+              var latest = visible[visible.length - 1]
+              var latestX = pointX(latest)
+              var latestY = pointY(latest)
+              context.beginPath()
+              context.arc(latestX, latestY, Style.space(4), 0, Math.PI * 2)
+              context.fillStyle = root.accent
+              context.fill()
+              context.beginPath()
+              context.arc(latestX, latestY, Style.space(7), 0, Math.PI * 2)
+              context.strokeStyle = root.alpha(root.accent, 0.28)
+              context.lineWidth = Style.space(2)
+              context.stroke()
+            }
+
+            if (liveValid) {
+              var liveX = left + plotWidth
+              var liveY = pointY(({ timestamp: now, temperature: liveTemperature }))
+              context.beginPath()
+              context.arc(liveX, liveY, Style.space(5), 0, Math.PI * 2)
+              context.fillStyle = root.liveColor
+              context.fill()
+              context.beginPath()
+              context.arc(liveX, liveY, Style.space(9), 0, Math.PI * 2)
+              context.strokeStyle = root.alpha(root.liveColor, 0.34)
+              context.lineWidth = Style.space(2)
+              context.stroke()
+            }
+
           }
 
           Component.onCompleted: requestPaint()
@@ -318,6 +344,8 @@ Item {
             function onRangeHoursChanged() { chart.requestPaint() }
             function onUnitChanged() { chart.requestPaint() }
             function onEmptyMessageChanged() { chart.requestPaint() }
+            function onConnectedChanged() { chart.requestPaint() }
+            function onLiveTemperatureChanged() { chart.requestPaint() }
           }
         }
       }

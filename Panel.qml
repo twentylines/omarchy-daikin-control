@@ -96,8 +96,11 @@ Panel {
   property var localTarget: null
   property string pendingPowerState: ""
   property double powerRequestStartedAt: 0
+  property double powerDispatchDueAt: 0
   property string powerReadbackMarker: ""
   property bool powerFinalCheckPending: false
+  property bool powerTimedOut: false
+  property string powerTimeoutMessage: ""
   property bool powerCanCancel: false
   property string queuedPowerRequest: ""
   property string queuedUnitPowerEntityId: ""
@@ -171,6 +174,10 @@ Panel {
   property string remoteHistoryMessage: ""
   property string remoteHistoryError: ""
   property string remoteHistoryPayload: ""
+  property string remoteHistoryTargetBeforeReconfigure: ""
+  property string remoteHistoryPortBeforeReconfigure: "22"
+  property string remoteHistoryUrlBeforeReconfigure: ""
+  property string remoteHistoryPathBeforeReconfigure: ""
   property string settingsSection: "preferences"
   property bool setupSucceeded: false
   property string setupUrl: "http://homeassistant.local:8123"
@@ -249,6 +256,8 @@ Panel {
     && (hasLocalPower ? localPower : (actualIsOn || modeRestarting))
   readonly property string unit: connected ? String(reading.unit || "°C") : "°C"
   readonly property string ambientText: connected ? temperature(reading.ambient) : "..."
+  readonly property string mainAmbientText: connected
+    ? (multiUnitActive ? root.averageAmbientText() : ambientText) : "..."
   readonly property string barAmbientText: connected ? formatBarAmbient() : "..."
   readonly property bool hasLocalTarget: localTarget !== null && isFinite(Number(localTarget))
   readonly property var targetValue: hasLocalTarget ? Number(localTarget) : reading.target
@@ -397,12 +406,14 @@ Panel {
     unitLocalStateRevision += 1
     queuedUnitPowerEntityId = ""
     queuedUnitPowerRequest = ""
+    unitPowerDispatchDelayTimer.stop()
   }
 
   function hasPendingUnitPower() {
     var current = unitLocalStates || ({})
     for (var id in current) {
-      if (current[id] && String(current[id].power || "") !== "") return true
+      if (current[id] && String(current[id].power || "") !== ""
+          && current[id].powerTimedOut !== true) return true
     }
     return false
   }
@@ -421,9 +432,10 @@ Panel {
     var changed = false
     for (var id in next) {
       var state = next[id]
-      if (!state || !state.power || state.powerFinalCheckPending === true) continue
+      if (!state || !state.power || state.powerTimedOut === true
+          || state.powerFinalCheckPending === true) continue
       var startedAt = Number(state.powerStartedAt)
-      if (isFinite(startedAt) && now - startedAt >= 15000) {
+      if (isFinite(startedAt) && startedAt > 0 && now - startedAt >= 15000) {
         state.powerFinalCheckPending = true
         changed = true
       }
@@ -434,30 +446,40 @@ Panel {
     return true
   }
 
-  function failUnitPowerFinalChecks() {
+  function timeoutUnitPowerFinalChecks() {
     var next = root.copyUnitLocalStates()
     var changed = false
     for (var id in next) {
       var state = next[id]
       if (!state || state.powerFinalCheckPending !== true) continue
-      delete state.power
       delete state.powerStartedAt
+      delete state.powerDispatchDueAt
       delete state.powerReadbackMarker
       delete state.powerFinalCheckPending
+      state.powerTimedOut = true
       delete state.powerCanCancel
       changed = true
-      var hasValues = false
-      for (var key in state) {
-        hasValues = true
-        break
-      }
-      if (!hasValues) delete next[id]
     }
     if (changed) {
       unitLocalStates = next
       unitLocalStateRevision += 1
     }
     return changed
+  }
+
+  function timeoutPendingPowerAfterStatus(message) {
+    var messages = []
+    if (powerFinalCheckPending) {
+      root.timeoutLocalPower(message
+        || "Power request timed out after 15 seconds; showing the requested state.")
+      messages.push(powerTimeoutMessage)
+    }
+    if (root.hasPendingUnitPowerFinalCheck()) {
+      if (root.timeoutUnitPowerFinalChecks()) {
+        messages.push("Power request timed out after 15 seconds; showing the requested AC state.")
+      }
+    }
+    return messages.join(" ")
   }
 
   function reconcileUnitLocalStates() {
@@ -476,21 +498,33 @@ Panel {
           var readbackMarker = root.powerMarker(climate)
           var readbackIsFresh = String(state.powerReadbackMarker || "") !== ""
             && readbackMarker !== "" && readbackMarker !== String(state.powerReadbackMarker)
-          if (observedOn === requestedOn && readbackIsFresh) {
-            delete state.power
-            delete state.powerStartedAt
-            delete state.powerReadbackMarker
-            delete state.powerFinalCheckPending
-            delete state.powerCanCancel
-          } else if (state.powerFinalCheckPending === true) {
-            delete state.power
-            delete state.powerStartedAt
-            delete state.powerReadbackMarker
-            delete state.powerFinalCheckPending
-            delete state.powerCanCancel
-            if (message === "") {
-              message = "Home Assistant still reports " + root.entityDisplayName(id)
-                + " as " + (observedOn ? "on" : "off") + "."
+          var dispatchPending = isFinite(Number(state.powerDispatchDueAt))
+            && Number(state.powerDispatchDueAt) > Date.now()
+          if (!dispatchPending) {
+            if (observedOn === requestedOn
+                && (readbackIsFresh || state.powerFinalCheckPending === true
+                  || state.powerTimedOut === true)) {
+              delete state.power
+              delete state.powerStartedAt
+              delete state.powerDispatchDueAt
+              delete state.powerReadbackMarker
+              delete state.powerFinalCheckPending
+              delete state.powerTimedOut
+              delete state.powerCanCancel
+            } else if (state.powerFinalCheckPending === true) {
+              delete state.powerStartedAt
+              delete state.powerDispatchDueAt
+              delete state.powerReadbackMarker
+              delete state.powerFinalCheckPending
+              state.powerTimedOut = true
+              delete state.powerCanCancel
+              if (message === "") {
+                message = root.entityDisplayName(id)
+                  + " power request timed out after 15 seconds; showing the requested state."
+              }
+            } else if (state.powerTimedOut === true && message === "") {
+              message = root.entityDisplayName(id)
+                + " power request timed out after 15 seconds; showing the requested state."
             }
           }
         }
@@ -518,11 +552,8 @@ Panel {
     else if (actionKind === "unit-mode") root.setUnitLocalStateValue(id, "mode", null)
     else if (actionKind === "unit-fan") root.setUnitLocalStateValue(id, "fan", null)
     else if (actionKind === "unit-power") {
-      root.setUnitLocalStateValue(id, "power", null)
-      root.setUnitLocalStateValue(id, "powerStartedAt", null)
-      root.setUnitLocalStateValue(id, "powerReadbackMarker", null)
-      root.setUnitLocalStateValue(id, "powerFinalCheckPending", null)
-      root.setUnitLocalStateValue(id, "powerCanCancel", null)
+      // Keep the optimistic power latch alive until its 15-second readback
+      // window expires. A slow or empty helper response is not a rejection.
     }
   }
 
@@ -542,9 +573,43 @@ Panel {
 
   function anyUnitOn() {
     for (var i = 0; i < unitReadings.length; i++) {
+      var id = String(unitReadings[i].entity_id || "")
+      var state = root.unitLocalState(id)
+      if (state.power) {
+        if (state.power === "turning_on") return true
+        continue
+      }
       if (String(unitReadings[i].state || "").toLowerCase() !== "off") return true
     }
     return false
+  }
+
+  function averageAmbientText() {
+    var value = root.averageAmbientValue()
+    var readings = unitReadings.length > 0 ? unitReadings : [reading]
+    var firstUnit = readings.length > 0 ? String(readings[0].unit || unit) : unit
+    return formatTemperatureValue(value, firstUnit)
+  }
+
+  function averageAmbientValue() {
+    var readings = unitReadings.length > 0 ? unitReadings : [reading]
+    if (readings.length === 0) return Number.NaN
+    var firstUnit = String(readings[0].unit || unit)
+    var sum = 0
+    var count = 0
+    var sameUnits = true
+    for (var i = 0; i < readings.length; i++) {
+      var value = Number(readings[i].ambient)
+      if (!isFinite(value)) continue
+      if (String(readings[i].unit || firstUnit) !== firstUnit) sameUnits = false
+      sum += value
+      count += 1
+    }
+    return count > 0 && sameUnits ? sum / count : Number(reading.ambient)
+  }
+
+  function mainAmbientValue() {
+    return multiUnitActive ? root.averageAmbientValue() : Number(reading.ambient)
   }
 
   function formatBarAmbient() {
@@ -671,9 +736,22 @@ Panel {
   function clearLocalPower() {
     pendingPowerState = ""
     powerRequestStartedAt = 0
+    powerDispatchDueAt = 0
     powerReadbackMarker = ""
     powerFinalCheckPending = false
+    powerTimedOut = false
+    powerTimeoutMessage = ""
     powerCanCancel = false
+    queuedPowerRequest = ""
+    powerDispatchDelayTimer.stop()
+  }
+
+  function timeoutLocalPower(message) {
+    powerFinalCheckPending = false
+    powerTimedOut = true
+    powerTimeoutMessage = message || "Power request timed out after 15 seconds; showing the requested state."
+    powerCanCancel = false
+    errorText = powerTimeoutMessage
   }
 
   function beginModeRestart() {
@@ -904,6 +982,13 @@ Panel {
     setupTransitionFinishTimer.stop()
     localServerConfirmTimer.stop()
     localServerConfirming = false
+    if (remoteHistoryReconfiguring && !remoteHistoryBusy)
+      root.cancelRemoteHistoryReconfigure()
+    else {
+      remoteHistoryReconfiguring = false
+      remoteHistoryMessage = ""
+      remoteHistoryError = ""
+    }
     if (!configured) {
       setupTransitioning = false
       setupTransitionClosing = false
@@ -970,6 +1055,17 @@ Panel {
       return
     }
     remoteHistoryMessage = "External-server setup guide opened."
+  }
+
+  function beginRemoteHistoryReconfigure() {
+    if (remoteHistoryBusy) return
+    remoteHistoryTargetBeforeReconfigure = remoteHistoryTarget
+    remoteHistoryPortBeforeReconfigure = remoteHistoryPortText
+    remoteHistoryUrlBeforeReconfigure = remoteHistoryUrl
+    remoteHistoryPathBeforeReconfigure = remoteHistoryPath
+    remoteHistoryReconfiguring = true
+    remoteHistoryMessage = ""
+    remoteHistoryError = ""
   }
 
   function copyRemoteHistorySource() {
@@ -1040,6 +1136,19 @@ Panel {
     remoteHistoryProcess.running = true
   }
 
+  function cancelRemoteHistoryReconfigure() {
+    if (remoteHistoryBusy) return
+    if (remoteHistoryTargetBeforeReconfigure !== "") {
+      remoteHistoryTarget = remoteHistoryTargetBeforeReconfigure
+      remoteHistoryPortText = remoteHistoryPortBeforeReconfigure
+      remoteHistoryUrl = remoteHistoryUrlBeforeReconfigure
+      remoteHistoryPath = remoteHistoryPathBeforeReconfigure
+    }
+    remoteHistoryReconfiguring = false
+    remoteHistoryMessage = ""
+    remoteHistoryError = ""
+  }
+
   function applyRemoteHistoryResult(raw) {
     var text = String(raw || "").trim()
     if (text === "") {
@@ -1056,6 +1165,10 @@ Panel {
         remoteHistoryPortText = String(parsed.history_remote_port || remoteHistoryPortText)
         remoteHistoryUrl = String(parsed.history_remote_url || remoteHistoryUrl)
         remoteHistoryPath = String(parsed.history_remote_path || remoteHistoryPath)
+        remoteHistoryTargetBeforeReconfigure = remoteHistoryTarget
+        remoteHistoryPortBeforeReconfigure = remoteHistoryPortText
+        remoteHistoryUrlBeforeReconfigure = remoteHistoryUrl
+        remoteHistoryPathBeforeReconfigure = remoteHistoryPath
         remoteHistoryError = ""
         remoteHistoryMessage = String(parsed.message || "Server history logger installed.")
         remoteHistoryInstallSucceeded = true
@@ -1624,6 +1737,10 @@ Panel {
         errorText = ""
         return
       }
+      if (source === "action" && actionKind === "unit-power") {
+        errorText = ""
+        return
+      }
       if (source === "action" && (actionKind === "mode" || actionKind === "fan")) {
         root.rejectLocalAction()
         errorText = ""
@@ -1635,14 +1752,10 @@ Panel {
         errorText = ""
         return
       }
-      if (source === "status" && powerFinalCheckPending) {
-        root.clearLocalPower()
-        errorText = "Could not refresh Home Assistant after 15 seconds; showing the last known state."
-        return
-      }
-      if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
-        root.failUnitPowerFinalChecks()
-        errorText = "Could not refresh Home Assistant after 15 seconds; showing the last known AC states."
+      if (source === "status"
+          && (powerFinalCheckPending || root.hasPendingUnitPowerFinalCheck())) {
+        errorText = root.timeoutPendingPowerAfterStatus(
+          "Power request timed out after 15 seconds; Home Assistant status could not be refreshed. Showing the requested state.")
         return
       }
       errorText = "The control helper returned no data."
@@ -1705,22 +1818,18 @@ Panel {
           selectedEntities = root.normalizeSelectedEntities(parsed.selected_entities, selectedEntity)
         pendingEntity = ""
         if (source === "status" && hasLocalPower && !actionProcess.running
-            && parsed.state !== undefined) {
+            && powerDispatchDueAt <= Date.now() && parsed.state !== undefined) {
           var observedOn = String(parsed.state || "").toLowerCase() !== "off"
           var requestedOn = localPower
           var readbackMarker = root.powerMarker(parsed)
           var readbackIsFresh = powerReadbackMarker !== ""
             && readbackMarker !== "" && readbackMarker !== powerReadbackMarker
-          if (observedOn === requestedOn && readbackIsFresh) {
+          if (observedOn === requestedOn
+              && (readbackIsFresh || powerFinalCheckPending || powerTimedOut)) {
             root.clearLocalPower()
-            errorText = ""
-            return
-          }
-          if (powerFinalCheckPending) {
-            root.clearLocalPower()
-            errorText = "Home Assistant still reports the air conditioner as "
-              + (observedOn ? "on" : "off") + " after 15 seconds."
-            return
+          } else if (powerFinalCheckPending) {
+            root.timeoutLocalPower(
+              "Power request timed out after 15 seconds; showing the requested state.")
           }
         }
         if (source === "status" && hasLocalTarget && sameTemperature(parsed.target, localTarget)) {
@@ -1738,31 +1847,28 @@ Panel {
           localFanMode = ""
           fanModeInFlight = ""
         }
-        errorText = ""
         var unitError = root.reconcileUnitLocalStates()
-        if (unitError !== "") errorText = unitError
+        var statusMessages = []
+        if (powerTimedOut && powerTimeoutMessage !== "")
+          statusMessages.push(powerTimeoutMessage)
+        if (unitError !== "") statusMessages.push(unitError)
+        errorText = statusMessages.join(" ")
       } else {
         if (source === "action" && hasLocalPower) {
           errorText = ""
           return
         }
-        if (source === "action" && actionKind === "unit-power"
-            && queuedUnitPowerEntityId !== "") {
+        if (source === "action" && actionKind === "unit-power") {
           errorText = ""
           return
         }
-        if (source === "status" && powerFinalCheckPending) {
+        if (source === "status"
+            && (powerFinalCheckPending || root.hasPendingUnitPowerFinalCheck())) {
           var finalStatusError = parsed && parsed.error ? String(parsed.error)
             : "Home Assistant status could not be refreshed"
-          root.clearLocalPower()
-          errorText = finalStatusError + "; showing the last known state."
-          return
-        }
-        if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
-          var unitFinalStatusError = parsed && parsed.error ? String(parsed.error)
-            : "Home Assistant status could not be refreshed"
-          root.failUnitPowerFinalChecks()
-          errorText = unitFinalStatusError + "; showing the last known AC states."
+          errorText = root.timeoutPendingPowerAfterStatus(
+            "Power request timed out after 15 seconds; " + finalStatusError
+              + ". Showing the requested state.")
           return
         }
         if (source === "action") {
@@ -1781,19 +1887,14 @@ Panel {
         errorText = ""
         return
       }
-      if (source === "action" && actionKind === "unit-power"
-          && queuedUnitPowerEntityId !== "") {
+      if (source === "action" && actionKind === "unit-power") {
         errorText = ""
         return
       }
-      if (source === "status" && powerFinalCheckPending) {
-        root.clearLocalPower()
-        errorText = "Home Assistant returned invalid status data; showing the last known state."
-        return
-      }
-      if (source === "status" && root.hasPendingUnitPowerFinalCheck()) {
-        root.failUnitPowerFinalChecks()
-        errorText = "Home Assistant returned invalid status data; showing the last known AC states."
+      if (source === "status"
+          && (powerFinalCheckPending || root.hasPendingUnitPowerFinalCheck())) {
+        errorText = root.timeoutPendingPowerAfterStatus(
+          "Power request timed out after 15 seconds; Home Assistant returned invalid status data. Showing the requested state.")
         return
       }
       if (source === "action") {
@@ -1967,29 +2068,55 @@ Panel {
     actionProcess.running = true
   }
 
-  function requestUnitPower(entityId, requestedPower, cancellable) {
+  function requestUnitPower(entityId, requestedPower, cancellable, dispatchAfter) {
     if (masterSwitchBusy) return
     var id = String(entityId || "")
     var climate = unitReading(id)
     if (!climate) return
     var requested = String(requestedPower || "").toLowerCase()
     if (["on", "off"].indexOf(requested) < 0) return
+    var now = Date.now()
+    var dueAt = Number(dispatchAfter)
+    if (!isFinite(dueAt)) dueAt = 0
     root.setUnitLocalStateValue(id, "power",
       requested === "on" ? "turning_on" : "turning_off")
-    root.setUnitLocalStateValue(id, "powerStartedAt", Date.now())
+    root.setUnitLocalStateValue(id, "powerStartedAt", null)
+    root.setUnitLocalStateValue(id, "powerDispatchDueAt", dueAt > now ? dueAt : null)
     root.setUnitLocalStateValue(id, "powerReadbackMarker", root.powerMarker(climate))
     root.setUnitLocalStateValue(id, "powerFinalCheckPending", false)
+    root.setUnitLocalStateValue(id, "powerTimedOut", false)
     root.setUnitLocalStateValue(id, "powerCanCancel", cancellable !== false)
     errorText = ""
-    if (actionProcess.running) {
+    if (actionProcess.running || dueAt > now) {
       queuedUnitPowerEntityId = id
       queuedUnitPowerRequest = requested
+      if (dueAt > now) root.scheduleQueuedUnitPowerRequest()
       return
     }
+    queuedUnitPowerEntityId = ""
+    queuedUnitPowerRequest = ""
+    root.dispatchUnitPowerRequest(id, requested)
+  }
+
+  function scheduleQueuedUnitPowerRequest() {
+    if (queuedUnitPowerEntityId === "" || actionProcess.running) return
+    var state = root.unitLocalState(queuedUnitPowerEntityId)
+    var dueAt = Number(state.powerDispatchDueAt)
+    if (isFinite(dueAt) && dueAt > Date.now()) {
+      unitPowerDispatchDelayTimer.interval = Math.max(50, dueAt - Date.now())
+      unitPowerDispatchDelayTimer.restart()
+      return
+    }
+    var id = queuedUnitPowerEntityId
+    var requested = queuedUnitPowerRequest
+    queuedUnitPowerEntityId = ""
+    queuedUnitPowerRequest = ""
     root.dispatchUnitPowerRequest(id, requested)
   }
 
   function dispatchUnitPowerRequest(entityId, requestedPower) {
+    root.setUnitLocalStateValue(entityId, "powerStartedAt", Date.now())
+    root.setUnitLocalStateValue(entityId, "powerDispatchDueAt", null)
     actionEntityId = String(entityId || "")
     actionKind = "unit-power"
     actionBusy = true
@@ -2002,8 +2129,12 @@ Panel {
   function cancelUnitPower(entityId) {
     var id = String(entityId || "")
     var state = root.unitLocalState(id)
-    if (masterSwitchBusy || !state.power || state.powerCanCancel !== true) return
-    root.requestUnitPower(id, state.power === "turning_on" ? "off" : "on", false)
+    if (masterSwitchBusy || !state.power || state.powerCanCancel !== true
+        || state.powerTimedOut === true) return
+    var dueAt = Date.now()
+    if (Number(state.powerStartedAt) > 0)
+      dueAt = Math.max(dueAt, Number(state.powerStartedAt) + 5000)
+    root.requestUnitPower(id, state.power === "turning_on" ? "off" : "on", false, dueAt)
   }
 
   function setAdvancedControlsEnabled(value) {
@@ -2426,21 +2557,44 @@ Panel {
     actionProcess.running = true
   }
 
-  function requestPower(requestedPower, cancellable) {
+  function requestPower(requestedPower, cancellable, dispatchAfter) {
+    dispatchAfter = Number(dispatchAfter)
+    var now = Date.now()
     pendingPowerState = requestedPower === "on" ? "turning_on" : "turning_off"
-    powerRequestStartedAt = Date.now()
+    powerRequestStartedAt = 0
+    powerDispatchDueAt = isFinite(dispatchAfter) ? Math.max(0, dispatchAfter) : 0
     powerReadbackMarker = root.powerMarker(reading)
     powerFinalCheckPending = false
+    powerTimedOut = false
+    powerTimeoutMessage = ""
     powerCanCancel = cancellable
     errorText = ""
-    if (actionProcess.running) {
+    if (actionProcess.running || powerDispatchDueAt > now) {
       queuedPowerRequest = requestedPower
+      if (powerDispatchDueAt > now) root.scheduleQueuedPowerRequest()
       return
     }
+    queuedPowerRequest = ""
     root.dispatchPowerRequest(requestedPower)
   }
 
+  function scheduleQueuedPowerRequest() {
+    if (queuedPowerRequest === "" || actionProcess.running) return
+    var dueAt = Number(powerDispatchDueAt)
+    if (isFinite(dueAt) && dueAt > Date.now()) {
+      powerDispatchDelayTimer.interval = Math.max(50, dueAt - Date.now())
+      powerDispatchDelayTimer.restart()
+      return
+    }
+    var requested = queuedPowerRequest
+    queuedPowerRequest = ""
+    powerDispatchDueAt = 0
+    root.dispatchPowerRequest(requested)
+  }
+
   function dispatchPowerRequest(requestedPower) {
+    powerRequestStartedAt = Date.now()
+    powerDispatchDueAt = 0
     actionEntityId = ""
     actionKind = "power"
     actionBusy = true
@@ -2449,13 +2603,17 @@ Panel {
   }
 
   function togglePower() {
-    if (masterSwitchBusy || actionProcess.running || !connected || hasLocalPower || modeRestarting) return
+    if (masterSwitchBusy || actionProcess.running || !connected
+        || (hasLocalPower && !powerTimedOut) || modeRestarting) return
     root.requestPower(isOn ? "off" : "on", true)
   }
 
   function cancelPower() {
-    if (masterSwitchBusy || !connected || !hasLocalPower || !powerCanCancel) return
-    root.requestPower(localPower ? "off" : "on", false)
+    if (masterSwitchBusy || !connected || !hasLocalPower || powerTimedOut || !powerCanCancel) return
+    var dueAt = Date.now()
+    if (powerRequestStartedAt > 0)
+      dueAt = Math.max(dueAt, powerRequestStartedAt + 5000)
+    root.requestPower(localPower ? "off" : "on", false, dueAt)
   }
 
   Process {
@@ -2713,14 +2871,9 @@ Panel {
       actionKind = ""
       actionEntityId = ""
       if (queuedUnitPowerEntity !== "") {
-        queuedUnitPowerEntityId = ""
-        queuedUnitPowerRequest = ""
-        Qt.callLater(function() {
-          root.dispatchUnitPowerRequest(queuedUnitPowerEntity, queuedUnitPower)
-        })
+        Qt.callLater(root.scheduleQueuedUnitPowerRequest)
       } else if (queuedPower !== "") {
-        queuedPowerRequest = ""
-        Qt.callLater(function() { root.dispatchPowerRequest(queuedPower) })
+        Qt.callLater(root.scheduleQueuedPowerRequest)
       } else if (queuedControl !== "") {
         queuedControlKind = ""
         queuedControlValue = ""
@@ -2744,12 +2897,28 @@ Panel {
   }
 
   Timer {
+    id: powerDispatchDelayTimer
+    interval: 100
+    repeat: false
+    onTriggered: root.scheduleQueuedPowerRequest()
+  }
+
+  Timer {
+    id: unitPowerDispatchDelayTimer
+    interval: 100
+    repeat: false
+    onTriggered: root.scheduleQueuedUnitPowerRequest()
+  }
+
+  Timer {
     id: powerConfirmTimer
     interval: 500
     repeat: true
-    running: root.hasLocalPower
+    running: root.hasLocalPower && !root.powerTimedOut
     onTriggered: {
-      if (!root.hasLocalPower) return
+      if (!root.hasLocalPower || root.powerTimedOut) return
+      if (root.powerRequestStartedAt <= 0
+          || root.powerDispatchDueAt > Date.now()) return
       if (Date.now() - root.powerRequestStartedAt < 15000) return
       if (root.powerFinalCheckPending) return
       if (root.refreshStatus()) root.powerFinalCheckPending = true
@@ -2824,7 +2993,15 @@ Panel {
       setupTransitionFinishTimer.stop()
       setupTransitioning = false
       setupTransitionClosing = false
+      if (remoteHistoryReconfiguring && !remoteHistoryBusy)
+        root.cancelRemoteHistoryReconfigure()
+      else remoteHistoryReconfiguring = false
     }
+  }
+
+  onSettingsSectionChanged: {
+    if (settingsSection !== "setup" && remoteHistoryReconfiguring
+        && !remoteHistoryBusy) root.cancelRemoteHistoryReconfigure()
   }
 
   IpcHandler {
@@ -3256,7 +3433,7 @@ Panel {
                 Toggle {
                   width: parent.width
                   label: "Show climate controls"
-                  description: "On by default. Keep mode and fan-speed controls visible in the main panel."
+                  description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
                   checked: root.advancedControls
                   enabled: !root.setupBusy
                   foreground: root.foreground
@@ -3607,7 +3784,7 @@ Panel {
             Toggle {
               width: parent.width
               label: "Show climate controls"
-              description: "Show mode and fan-speed controls in the main panel."
+              description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
               checked: root.advancedControls
               enabled: !root.setupBusy && !root.preferenceBusy
               foreground: root.foreground
@@ -3617,45 +3794,23 @@ Panel {
             }
 
             Toggle {
-              visible: root.advancedControls || height > 0.5
               width: parent.width
-              height: root.advancedControls ? implicitHeight : 0
-              opacity: root.advancedControls ? 1 : 0
-              clip: true
               label: "MasterSwitch"
-              description: "Show guarded controls for every available climate device."
+              description: "Show guarded controls for every available climate device, independently of climate controls."
               checked: root.masterSwitchEnabled
               enabled: !root.setupBusy && !root.preferenceBusy
               foreground: root.foreground
               accent: root.accentColor
               fontFamily: root.fontFamily
               onClicked: root.setMasterSwitchEnabled(!root.masterSwitchEnabled)
-
-              Behavior on height {
-                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
-              }
-              Behavior on opacity {
-                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
-              }
             }
 
             BorderSurface {
-              visible: root.advancedControls || height > 0.5
               width: parent.width
               implicitHeight: masterSwitchWarning.implicitHeight + Style.space(18)
-              height: root.advancedControls ? implicitHeight : 0
-              opacity: root.advancedControls ? 1 : 0
-              clip: true
               color: root.alpha(root.urgent, 0.07)
               borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
               radius: root.compactRadius
-
-              Behavior on height {
-                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
-              }
-              Behavior on opacity {
-                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
-              }
 
               Text {
                 id: masterSwitchWarning
@@ -3922,9 +4077,7 @@ Panel {
                     enabled: !root.remoteHistoryBusy && !root.preferenceBusy
                     tooltipText: "Edit the external server connection"
                     onClicked: {
-                      root.remoteHistoryReconfiguring = true
-                      root.remoteHistoryMessage = ""
-                      root.remoteHistoryError = ""
+                      root.beginRemoteHistoryReconfigure()
                     }
                   }
                 }
@@ -4119,7 +4272,9 @@ Panel {
                     spacing: Style.space(6)
 
                     Button {
-                      width: parent.width
+                      id: remoteHistoryInstallButton
+                      width: parent.width - (remoteHistoryCancelButton.visible
+                        ? remoteHistoryCancelButton.width + parent.spacing : 0)
                       height: Style.space(40)
                       text: root.remoteHistoryBusy ? "INSTALLING…" : "INSTALL SERVER TIMER"
                       iconText: root.remoteHistoryBusy ? "" : "󰒓"
@@ -4146,6 +4301,24 @@ Panel {
                         color: Color.popups.background
                         strokeWidth: Style.space(2)
                       }
+                    }
+
+                    Button {
+                      id: remoteHistoryCancelButton
+                      visible: root.remoteHistoryPaired && root.remoteHistoryReconfiguring
+                      width: visible ? Style.space(86) : 0
+                      height: Style.space(40)
+                      text: "CANCEL"
+                      fontSize: Style.font.caption
+                      fontFamily: root.fontFamily
+                      foreground: root.foreground
+                      accent: root.accentColor
+                      background: root.alpha(root.foreground, 0.025)
+                      bordered: true
+                      radius: root.compactRadius
+                      enabled: !root.remoteHistoryBusy && !root.preferenceBusy
+                      tooltipText: "Keep the current external-server pairing"
+                      onClicked: root.cancelRemoteHistoryReconfigure()
                     }
                   }
 
@@ -4643,7 +4816,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "ACCENT MODE"
+              text: "CUSTOMISATION"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -4653,7 +4826,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Auto follows Omarchy's current accent. Custom keeps the plugin's chosen accent and finish."
+              text: "Choose the plugin accent and visual finish. Auto follows Omarchy; Custom keeps your choices."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -5938,7 +6111,9 @@ Panel {
 
           Text {
             width: parent.width
-            text: "Each selected air conditioner has its own remote."
+            text: root.advancedControls
+              ? "Each selected air conditioner has its own remote."
+              : "Climate controls are hidden; each AC keeps its own power button."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -5964,6 +6139,7 @@ Panel {
                   return root.unitLocalState(String(modelData))
                 }
                 powerCancelEnabled: root.connected && !root.masterSwitchBusy
+                showClimateControls: root.advancedControls
                 accent: root.accentColor
                 foreground: root.foreground
                 dim: root.dim
@@ -6066,7 +6242,7 @@ Panel {
 
               Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "AMBIENT"
+                text: root.multiUnitActive ? "AVG AMBIENT" : "AMBIENT"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -6076,7 +6252,7 @@ Panel {
 
               Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: root.ambientText
+                text: root.mainAmbientText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.displayLarge
@@ -6272,7 +6448,7 @@ Panel {
             visible: !root.splitPowerOnly
             connected: root.connected
             isOn: root.isOn
-            powerPending: root.hasLocalPower
+            powerPending: root.hasLocalPower && !root.powerTimedOut
             localPowerOn: root.localPower
             modePending: root.modeRestarting
             powerCanCancel: root.powerCanCancel
@@ -6305,9 +6481,14 @@ Panel {
                   var revision = root.unitLocalStateRevision
                   return root.unitLocalState(entityId)
                 }
-                readonly property bool powerPending: String(localState.power || "") !== ""
+                readonly property bool connected: root.connected
+                  && climate.entity_id !== undefined
+                readonly property bool hasLocalPower: String(localState.power || "") !== ""
+                readonly property bool powerPending: hasLocalPower
+                  && localState.powerTimedOut !== true
                 readonly property bool localPowerOn: String(localState.power || "") === "turning_on"
-                readonly property bool actualIsOn: String(climate.state || "").toLowerCase() !== "off"
+                readonly property bool actualIsOn: connected
+                  && String(climate.state || "").toLowerCase() !== "off"
 
                 width: Math.max(
                   Style.space(160),
@@ -6327,21 +6508,40 @@ Panel {
                     anchors.margins: Style.space(10)
                     spacing: Style.space(5)
 
-                    Text {
+                    Row {
                       width: parent.width
-                      text: root.entityDisplayName(splitPowerCard.entityId)
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                      elide: Text.ElideRight
+                      spacing: Style.space(5)
+
+                      Text {
+                        width: Math.max(0,
+                          parent.width - splitPowerAmbientText.implicitWidth - parent.spacing)
+                        text: root.entityDisplayName(splitPowerCard.entityId)
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        id: splitPowerAmbientText
+                        width: implicitWidth
+                        text: splitPowerCard.connected
+                          ? ("AMBIENT " + root.formatTemperatureValue(
+                              splitPowerCard.climate.ambient,
+                              splitPowerCard.climate.unit || root.unit)) : "..."
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
                     }
 
                     ClimatePowerControl {
                       width: parent.width
                       height: Style.space(36)
-                      connected: root.connected && splitPowerCard.climate.entity_id !== undefined
-                      isOn: splitPowerCard.powerPending
+                      connected: splitPowerCard.connected
+                      isOn: splitPowerCard.hasLocalPower
                         ? splitPowerCard.localPowerOn : splitPowerCard.actualIsOn
                       powerPending: splitPowerCard.powerPending
                       localPowerOn: splitPowerCard.localPowerOn
@@ -6485,8 +6685,7 @@ Panel {
 
         BorderSurface {
           id: masterSwitchCard
-          readonly property bool masterSwitchVisible: root.advancedControls
-            && root.masterSwitchEnabled && root.connected
+          readonly property bool masterSwitchVisible: root.masterSwitchEnabled && root.connected
           visible: masterSwitchVisible || height > 0.5
           width: parent.width
           implicitHeight: masterSwitchForm.implicitHeight + Style.space(28)
@@ -6639,6 +6838,8 @@ Panel {
           points: root.historyPoints
           rangeHours: root.historyHours
           unit: root.unit
+          connected: root.connected
+          liveTemperature: root.mainAmbientValue()
           sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
