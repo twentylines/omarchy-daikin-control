@@ -3432,200 +3432,237 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Start the Daikin AC controls setup again from the beginning."
+              text: "Manage the plugin's saved data and installation."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
             }
 
-            Column {
-              visible: root.resetAppConfirming || height > 0.5
+            BorderSurface {
+              id: resetCard
               width: parent.width
-              height: root.resetAppConfirming ? implicitHeight : 0
-              opacity: root.resetAppConfirming ? 1 : 0
-              clip: true
-              spacing: Style.space(7)
+              implicitHeight: resetForm.implicitHeight + Style.space(20)
+              color: root.alpha(root.urgent, 0.035)
+              borderSpec: Border.flat(root.alpha(root.urgent, 0.20), 1)
+              radius: root.compactRadius
 
-              Behavior on height {
-                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
-              }
-              Behavior on opacity {
-                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
-              }
+              Column {
+                id: resetForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(12)
+                spacing: Style.space(7)
 
-              Item {
-                id: resetConfirmWarning
-                width: parent.width
-                height: root.resetAppConfirming ? resetWarningSurface.implicitHeight : 0
-                implicitHeight: height
-                opacity: root.resetAppConfirming ? 1 : 0
-                visible: opacity > 0.01
-                clip: true
-
-                Behavior on height {
-                  NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                Text {
+                  width: parent.width
+                  text: "RESET PLUGIN"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
                 }
-                Behavior on opacity {
-                  NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+
+                Text {
+                  width: parent.width
+                  text: "Start the Daikin AC controls setup again from the beginning."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+
+                Column {
+                  visible: root.resetAppConfirming || height > 0.5
+                  width: parent.width
+                  height: root.resetAppConfirming ? implicitHeight : 0
+                  opacity: root.resetAppConfirming ? 1 : 0
+                  clip: true
+                  spacing: Style.space(7)
+
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
+
+                  Item {
+                    id: resetConfirmWarning
+                    width: parent.width
+                    height: root.resetAppConfirming ? resetWarningSurface.implicitHeight : 0
+                    implicitHeight: height
+                    opacity: root.resetAppConfirming ? 1 : 0
+                    visible: opacity > 0.01
+                    clip: true
+
+                    Behavior on height {
+                      NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                    }
+                    Behavior on opacity {
+                      NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                    }
+
+                    BorderSurface {
+                      id: resetWarningSurface
+                      width: parent.width
+                      implicitHeight: resetAppWarning.implicitHeight + Style.space(18)
+                      color: root.alpha(root.urgent, 0.07)
+                      borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                      radius: root.compactRadius
+
+                      Text {
+                        id: resetAppWarning
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(10)
+                        anchors.rightMargin: Style.space(10)
+                        text: "This resets the plugin's saved Home Assistant connection, preferences, and local temperature history. It does not reset Home Assistant, its Docker container, any Home Assistant data, or an external server timer/history file."
+                        color: root.urgent
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                      }
+                    }
+                  }
+                }
+
+                Item {
+                  id: resetActionArea
+                  width: parent.width
+                  height: Style.space(40)
+                  clip: true
+
+                  Button {
+                    id: resetButton
+                    anchors.fill: parent
+                    visible: opacity > 0.01
+                    opacity: 1 - resetSplitFrame.splitProgress
+                    text: "RESET PLUGIN"
+                    fontSize: Style.font.bodySmall
+                    fontFamily: root.fontFamily
+                    foreground: root.urgent
+                    accent: root.urgent
+                    background: root.alpha(root.urgent, 0.08)
+                    bordered: true
+                    radius: root.compactRadius
+                    enabled: !root.resetAppBusy && !root.resetAppConfirming && !root.setupBusy
+                      && !root.localServerBusy && !root.preferenceBusy
+                      && !root.uninstallConfirming && !root.uninstallBusy
+                      && !configProcess.running && !entitiesProcess.running
+                    onClicked: root.requestResetApp()
+
+                  }
+
+                  Item {
+                    id: resetSplitFrame
+                    anchors.fill: parent
+                    clip: true
+                    property real splitProgress: root.resetAppConfirming ? 1 : 0
+                    readonly property real backWidth: Style.space(86) * splitProgress
+                    readonly property real splitGap: Style.space(8) * splitProgress
+                    visible: opacity > 0.01
+                    opacity: splitProgress
+
+                    Behavior on splitProgress {
+                      NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
+                    }
+
+                    Button {
+                      id: resetBackButton
+                      x: 0
+                      width: resetSplitFrame.backWidth
+                      height: parent.height
+                      visible: resetSplitFrame.splitProgress > 0.02
+                      opacity: Math.min(1, resetSplitFrame.splitProgress * 1.5)
+                      clip: true
+                      text: "BACK"
+                      iconText: "←"
+                      iconSize: Style.font.body
+                      fontSize: Style.font.bodySmall
+                      horizontalPadding: Style.space(4)
+                      fontFamily: root.fontFamily
+                      foreground: root.foreground
+                      accent: root.urgent
+                      background: root.alpha(root.foreground, 0.025)
+                      bordered: true
+                      radius: root.compactRadius
+                      enabled: !root.resetAppBusy
+                      tooltipText: "Keep the app data"
+                      onClicked: root.cancelResetApp()
+                    }
+
+                    Button {
+                      id: resetConfirmButton
+                      x: resetSplitFrame.backWidth + resetSplitFrame.splitGap
+                      width: Math.max(0, parent.width - x)
+                      height: parent.height
+                      clip: true
+                      opacity: resetSplitFrame.splitProgress
+                      text: root.resetAppBusy ? "RESETTING…" : "RESET NOW"
+                      fontSize: Style.font.bodySmall
+                      fontFamily: root.fontFamily
+                      foreground: Color.popups.background
+                      accent: root.urgent
+                      background: root.urgent
+                      bordered: false
+                      radius: root.compactRadius
+                      enabled: !root.resetAppBusy
+                      tooltipText: "Remove only Daikin AC Controls data"
+                      onClicked: root.resetApp()
+
+                      LoadingRing {
+                        visible: root.resetAppBusy
+                        anchors.left: parent.left
+                        anchors.leftMargin: Style.space(14)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(16)
+                        height: width
+                        color: Color.popups.background
+                        strokeWidth: Style.space(2)
+                      }
+                    }
+                  }
                 }
 
                 BorderSurface {
-                  id: resetWarningSurface
+                  readonly property bool hasResetStatus: root.resetAppMessage !== ""
+                    || root.resetAppError !== ""
+                  visible: hasResetStatus || height > 0.5
                   width: parent.width
-                  implicitHeight: resetAppWarning.implicitHeight + Style.space(18)
-                  color: root.alpha(root.urgent, 0.07)
-                  borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                  implicitHeight: appDataStatus.implicitHeight + Style.space(18)
+                  height: hasResetStatus ? implicitHeight : 0
+                  opacity: hasResetStatus ? 1 : 0
+                  clip: true
+                  color: root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.09)
+                  borderSpec: Border.flat(root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.32), 1)
                   radius: root.compactRadius
 
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
+
                   Text {
-                    id: resetAppWarning
+                    id: appDataStatus
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: Style.space(10)
                     anchors.rightMargin: Style.space(10)
-                    text: "This resets the plugin's saved Home Assistant connection, preferences, and local temperature history. It does not reset Home Assistant, its Docker container, any Home Assistant data, or an external server timer/history file."
-                    color: root.urgent
+                    text: root.resetAppError !== ""
+                      ? root.resetAppError : root.resetAppMessage
+                    color: root.resetAppError !== "" ? root.urgent : Color.accent
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: Style.font.bodySmall
                     wrapMode: Text.WordWrap
                   }
                 }
-              }
-            }
-
-            Item {
-              id: resetActionArea
-              width: parent.width
-              height: Style.space(40)
-              clip: true
-
-              Button {
-                id: resetButton
-                anchors.fill: parent
-                visible: opacity > 0.01
-                opacity: 1 - resetSplitFrame.splitProgress
-                text: "RESET APP"
-                fontSize: Style.font.bodySmall
-                fontFamily: root.fontFamily
-                foreground: root.urgent
-                accent: root.urgent
-                background: root.alpha(root.urgent, 0.07)
-                bordered: true
-                radius: root.compactRadius
-                enabled: !root.resetAppBusy && !root.resetAppConfirming && !root.setupBusy
-                  && !root.localServerBusy && !root.preferenceBusy
-                  && !root.uninstallConfirming && !root.uninstallBusy
-                  && !configProcess.running && !entitiesProcess.running
-                onClicked: root.requestResetApp()
-
-              }
-
-              Item {
-                id: resetSplitFrame
-                anchors.fill: parent
-                clip: true
-                property real splitProgress: root.resetAppConfirming ? 1 : 0
-                readonly property real backWidth: Style.space(86) * splitProgress
-                readonly property real splitGap: Style.space(8) * splitProgress
-                visible: opacity > 0.01
-                opacity: splitProgress
-
-                Behavior on splitProgress {
-                  NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
-                }
-
-                Button {
-                  id: resetBackButton
-                  x: 0
-                  width: resetSplitFrame.backWidth
-                  height: parent.height
-                  visible: resetSplitFrame.splitProgress > 0.02
-                  opacity: Math.min(1, resetSplitFrame.splitProgress * 1.5)
-                  clip: true
-                  text: "BACK"
-                  iconText: "←"
-                  iconSize: Style.font.body
-                  fontSize: Style.font.bodySmall
-                  horizontalPadding: Style.space(4)
-                  fontFamily: root.fontFamily
-                  foreground: root.foreground
-                  accent: root.urgent
-                  background: root.alpha(root.foreground, 0.025)
-                  bordered: true
-                  radius: root.compactRadius
-                  enabled: !root.resetAppBusy
-                  tooltipText: "Keep the app data"
-                  onClicked: root.cancelResetApp()
-                }
-
-                Button {
-                  id: resetConfirmButton
-                  x: resetSplitFrame.backWidth + resetSplitFrame.splitGap
-                  width: Math.max(0, parent.width - x)
-                  height: parent.height
-                  clip: true
-                  opacity: resetSplitFrame.splitProgress
-                  text: root.resetAppBusy ? "RESETTING…" : "RESET NOW"
-                  fontSize: Style.font.bodySmall
-                  fontFamily: root.fontFamily
-                  foreground: Color.popups.background
-                  accent: root.urgent
-                  background: root.urgent
-                  bordered: false
-                  radius: root.compactRadius
-                  enabled: !root.resetAppBusy
-                  tooltipText: "Remove only Daikin AC Controls data"
-                  onClicked: root.resetApp()
-
-                  LoadingRing {
-                    visible: root.resetAppBusy
-                    anchors.left: parent.left
-                    anchors.leftMargin: Style.space(14)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(16)
-                    height: width
-                    color: Color.popups.background
-                    strokeWidth: Style.space(2)
-                  }
-                }
-              }
-            }
-
-            BorderSurface {
-              readonly property bool hasResetStatus: root.resetAppMessage !== ""
-                || root.resetAppError !== ""
-              visible: hasResetStatus || height > 0.5
-              width: parent.width
-              implicitHeight: appDataStatus.implicitHeight + Style.space(18)
-              height: hasResetStatus ? implicitHeight : 0
-              opacity: hasResetStatus ? 1 : 0
-              clip: true
-              color: root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.09)
-              borderSpec: Border.flat(root.alpha(root.resetAppError !== "" ? root.urgent : Color.accent, 0.32), 1)
-              radius: root.compactRadius
-
-              Behavior on height {
-                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
-              }
-              Behavior on opacity {
-                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
-              }
-
-              Text {
-                id: appDataStatus
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: Style.space(10)
-                anchors.rightMargin: Style.space(10)
-                text: root.resetAppError !== ""
-                  ? root.resetAppError : root.resetAppMessage
-                color: root.resetAppError !== "" ? root.urgent : Color.accent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                wrapMode: Text.WordWrap
               }
             }
 
