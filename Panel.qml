@@ -3958,7 +3958,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: Style.space(10)
                 anchors.rightMargin: Style.space(10)
-                text: "EXPERIMENTAL · These options are opt-in and may change. Keep global sync enabled unless you need separate remotes."
+                text: "EXPERIMENTAL · These options are opt-in and may change."
                 color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -4173,16 +4173,65 @@ Panel {
               onClicked: root.settingsSection = "preferences"
             }
 
-            Toggle {
+            Text {
               width: parent.width
-              label: "Custom appearance"
-              description: "Use your own accent color and panel finish instead of the Omarchy accent."
-              checked: root.customAppearanceEnabled
-              enabled: !root.preferenceBusy
-              foreground: root.foreground
-              accent: root.accentColor
-              fontFamily: root.fontFamily
-              onClicked: root.setCustomAppearanceEnabled(!root.customAppearanceEnabled)
+              text: "ACCENT MODE"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 0.8
+            }
+
+            Text {
+              width: parent.width
+              text: "Auto follows Omarchy's current accent. Custom keeps the plugin's chosen accent and finish."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              id: appearanceModeChoices
+              width: parent.width
+              spacing: Style.space(6)
+
+              Button {
+                width: (appearanceModeChoices.width - appearanceModeChoices.spacing) / 2
+                height: Style.space(34)
+                text: "AUTO · OMARCHY"
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(3)
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.accentColor
+                background: root.alpha(root.foreground, 0.025)
+                bordered: true
+                selected: !root.customAppearanceEnabled
+                enabled: !root.preferenceBusy
+                radius: root.compactRadius
+                tooltipText: "Follow Omarchy's current accent"
+                onClicked: root.setCustomAppearanceEnabled(false)
+              }
+
+              Button {
+                width: (appearanceModeChoices.width - appearanceModeChoices.spacing) / 2
+                height: Style.space(34)
+                text: "CUSTOM"
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(3)
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.accentColor
+                background: root.alpha(root.foreground, 0.025)
+                bordered: true
+                selected: root.customAppearanceEnabled
+                enabled: !root.preferenceBusy
+                radius: root.compactRadius
+                tooltipText: "Use the custom accent and finish below"
+                onClicked: root.setCustomAppearanceEnabled(true)
+              }
             }
 
             Column {

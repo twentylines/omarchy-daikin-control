@@ -114,10 +114,11 @@ change is sent to every selected AC. Turning it off shows a compact remote for
 each selected unit. The bar ambient summary can show the average, all values,
 one unit, or a chosen subset.
 
-The custom appearance controls replace the Omarchy accent only while enabled.
-They include a color picker/hex value and typed values for transparency,
-softness, and corner radius. The compositor still controls system-wide blur;
-the plugin's softness value only changes its own surface treatment.
+The appearance mode can follow Omarchy automatically or use a custom accent.
+Custom mode includes a color picker/hex value and typed values for
+transparency, softness, and corner radius. The compositor still controls
+system-wide blur; the plugin's softness value only changes its own surface
+treatment.
 
 ### Optional local Home Assistant server
 
