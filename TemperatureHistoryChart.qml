@@ -96,7 +96,7 @@ Item {
           Text {
             id: historyTitle
             width: parent.width
-            text: "AMBIENT HISTORY"
+            text: "AMBIENT TEMPERATURE HISTORY"
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

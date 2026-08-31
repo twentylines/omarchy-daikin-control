@@ -64,7 +64,7 @@ To change the server, token, or selected entity later, open the panel and use
 the small settings button in the hero card. Settings groups connection and
 local-server setup together; **Preferences** can show supported climate modes
 and fan speeds, choose whether the bar shows ambient temperature, target
-temperature, or both, and enable the optional Temperature History for Nerds
+temperature, or both, and enable the optional Ambient Temperature History
 chart. **Maintenance** contains project help, reset controls, and uninstall
 options.
 
@@ -86,7 +86,7 @@ is required because the widget cannot safely prompt for a password. If you
 currently use password login, the dedicated guide explains the one-time
 dedicated-key `ssh-keygen` and `ssh-copy-id` setup. **HOME ASSISTANT SETTINGS**
 opens the Home Assistant address used by the widget.
-**MANUAL GUIDE** opens the dedicated GitHub guide. **COPY SOURCE** is an
+**GUIDE** opens the dedicated GitHub guide. **COPY SOURCE** is an
 optional clipboard action for reviewing the exact files locally before
 installing.
 

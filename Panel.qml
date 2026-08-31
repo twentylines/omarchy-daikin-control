@@ -2445,6 +2445,24 @@ Panel {
               }
             }
 
+            Button {
+              width: parent.width
+              height: Style.space(40)
+              text: "HOME ASSISTANT SETTINGS"
+              iconText: "↗"
+              iconSize: Style.font.body
+              fontSize: Style.font.bodySmall
+              enabled: !root.setupBusy && !root.localServerBusy
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: Color.accent
+              background: root.alpha(root.foreground, 0.025)
+              bordered: true
+              radius: root.compactRadius
+              tooltipText: "Open the Home Assistant address used by this widget"
+              onClicked: root.openHomeAssistantSettings()
+            }
+
             Text {
               width: parent.width
               text: root.configured
@@ -2615,7 +2633,7 @@ Panel {
                 id: localServerGuideButton
                 width: Style.space(112)
                 height: Style.space(40)
-                text: "MANUAL GUIDE"
+                text: "GUIDE"
                 fontSize: Style.font.caption
                 fontFamily: root.fontFamily
                 foreground: root.foreground
@@ -2883,7 +2901,7 @@ Panel {
 
             Toggle {
               width: parent.width
-              label: "Temperature history for nerds"
+              label: "Ambient temperature history"
               description: root.historySource === "server"
                 ? "Show the server's ambient log in the main panel."
                 : "Show the ambient log saved on this PC in the main panel."
@@ -3134,26 +3152,9 @@ Panel {
                     spacing: Style.space(6)
 
                     Button {
-                      width: (parent.width - parent.spacing) / 2
+                      width: parent.width
                       height: Style.space(38)
-                      text: "HOME ASSISTANT SETTINGS"
-                      fontSize: Style.font.caption
-                      horizontalPadding: Style.space(3)
-                      fontFamily: root.fontFamily
-                      foreground: root.foreground
-                      accent: Color.accent
-                      background: root.alpha(root.foreground, 0.025)
-                      bordered: true
-                      radius: root.compactRadius
-                      tooltipText: "Open the Home Assistant address used by this widget"
-                      enabled: !root.remoteHistoryBusy && !root.remoteHistorySourceBusy
-                      onClicked: root.openHomeAssistantSettings()
-                    }
-
-                    Button {
-                      width: (parent.width - parent.spacing) / 2
-                      height: Style.space(38)
-                      text: "MANUAL GUIDE"
+                      text: "GUIDE"
                       iconText: "↗"
                       iconSize: Style.font.body
                       fontSize: Style.font.caption

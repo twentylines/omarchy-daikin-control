@@ -336,7 +336,7 @@ class HelperTests(unittest.TestCase):
                 ["ssh"], 255, "", "Permission denied (publickey,password)."
             )
         )
-        self.assertIn("Open MANUAL GUIDE", result)
+        self.assertIn("Open GUIDE", result)
         self.assertNotIn("Copy the SSH guide", result)
         self.assertIn("dedicated plugin key", result)
 

@@ -60,7 +60,11 @@ once. This leaves any existing `~/.ssh/id_ed25519` key unchanged:
    unavailable, install it through your normal OpenSSH package or follow your
    distribution's documented `authorized_keys` setup instead.
 
-## Install from the plugin
+## Install the logger
+
+After the one-time key setup, choose one of these paths.
+
+### Recommended: run the supplied installer
 
 1. Open **Daikin AC Controls → Settings → Preferences**.
 2. Set **History Source** to **EXTERNAL SERVER**.
@@ -71,6 +75,67 @@ once. This leaves any existing `~/.ssh/id_ed25519` key unchanged:
 The plugin sends the selected Home Assistant token through encrypted SSH
 standard input. It is not placed in a command-line argument. The installer
 then creates a user-owned service and timer on the external host.
+
+### Manual installation
+
+Use this when you want to run each step yourself. From a checkout of this
+repository on the Omarchy PC, copy the two files to the external host:
+
+```bash
+ssh -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
+  sai@192.168.0.10 'mkdir -p ~/.local/bin ~/.config/omarchy'
+scp -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
+  remote-history-logger.py \
+  sai@192.168.0.10:.local/bin/omarchy-homeassistant-ac-history.py
+scp -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
+  install-remote-history.sh \
+  sai@192.168.0.10:.local/bin/install-omarchy-homeassistant-ac-history.sh
+ssh -o IdentitiesOnly=yes -i ~/.ssh/omarchy-homeassistant-ac \
+  sai@192.168.0.10 \
+  'chmod 700 ~/.local/bin/omarchy-homeassistant-ac-history.py \
+   ~/.local/bin/install-omarchy-homeassistant-ac-history.sh'
+```
+
+The copied names are the destinations expected by the installer. On the
+external host, create the config without putting the token in a command line:
+
+```bash
+mkdir -p ~/.config/omarchy
+umask 077
+nano ~/.config/omarchy/homeassistant-ac-history.json
+chmod 600 ~/.config/omarchy/homeassistant-ac-history.json
+```
+
+Use this JSON shape and replace the URL, token, entity, and optional history
+path with your values:
+
+```json
+{
+  "url": "http://127.0.0.1:8123",
+  "token": "YOUR_HOME_ASSISTANT_LONG_LIVED_TOKEN",
+  "entity_id": "climate.your_entity",
+  "interval_seconds": 60,
+  "history_path": "~/.local/state/omarchy/homeassistant-ac-temperature.json"
+}
+```
+
+Then run the supplied installer on the external host:
+
+```bash
+~/.local/bin/install-omarchy-homeassistant-ac-history.sh
+```
+
+It creates the user service and timer, performs the first sample, and prints
+the exact timer inspection commands. If you do not want to use the installer,
+create the same service and timer files under `~/.config/systemd/user/`, using
+the `ExecStart` and timer settings shown in
+[`install-remote-history.sh`](install-remote-history.sh), then run:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now omarchy-homeassistant-ac-history.timer
+systemctl --user start omarchy-homeassistant-ac-history.service
+```
 
 ## What gets installed
 
@@ -91,6 +156,17 @@ It also creates:
 
 The logger reads one climate state from the local Home Assistant API and
 writes the chart history. It does not send AC control commands.
+
+## Keep the SSH key
+
+Keep the private key `~/.ssh/omarchy-homeassistant-ac` on the Omarchy PC and
+leave its public key in the external user's `~/.ssh/authorized_keys`. The
+server-side logger does not need an SSH key while it records; the Omarchy
+plugin does need the private key every time it connects back to read the
+server's history file and display it in the chart. Deleting the key after
+installation would make the logger continue recording on the server, but the
+chart could no longer read those samples. The plugin does not delete this
+credential during any uninstall scope.
 
 ## Scope and review
 
