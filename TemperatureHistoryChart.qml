@@ -20,7 +20,6 @@ Item {
   property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
   property bool connected: false
-  property var liveTemperature: null
   property color liveColor: "#79B889"
 
   implicitHeight: Style.space(248)
@@ -209,8 +208,6 @@ Item {
             var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
             var start = now - rangeSeconds
             var visible = []
-            var liveValid = root.connected && isFinite(Number(root.liveTemperature))
-            var liveTemperature = Number(root.liveTemperature)
 
             for (var i = 0; i < values.length; i++) {
               if (values[i].timestamp >= start && values[i].timestamp <= now + 300)
@@ -223,11 +220,7 @@ Item {
               minValue = Math.min(minValue, visible[j].temperature)
               maxValue = Math.max(maxValue, visible[j].temperature)
             }
-            if (liveValid) {
-              minValue = Math.min(minValue, liveTemperature)
-              maxValue = Math.max(maxValue, liveTemperature)
-            }
-            if (visible.length === 0 && !liveValid) {
+            if (visible.length === 0) {
               minValue = 0
               maxValue = 1
             } else if (Math.abs(maxValue - minValue) < 0.1) {
@@ -292,7 +285,7 @@ Item {
                 x, height - Style.space(11), axisAlign)
             }
 
-            if (visible.length === 0 && !liveValid) {
+            if (visible.length === 0) {
               context.fillStyle = root.alpha(root.foreground, 0.54)
               context.textAlign = "center"
               context.textBaseline = "middle"
@@ -361,20 +354,6 @@ Item {
               context.stroke()
             }
 
-            if (liveValid) {
-              var liveX = left + plotWidth
-              var liveY = pointY(({ timestamp: now, temperature: liveTemperature }))
-              context.beginPath()
-              context.arc(liveX, liveY, Style.space(3), 0, Math.PI * 2)
-              context.fillStyle = root.liveColor
-              context.fill()
-              context.beginPath()
-              context.arc(liveX, liveY, Style.space(6), 0, Math.PI * 2)
-              context.strokeStyle = root.alpha(root.liveColor, 0.24)
-              context.lineWidth = Style.space(2)
-              context.stroke()
-            }
-
           }
 
           Component.onCompleted: requestPaint()
@@ -389,7 +368,6 @@ Item {
             function onUnitChanged() { chart.requestPaint() }
             function onEmptyMessageChanged() { chart.requestPaint() }
             function onConnectedChanged() { chart.requestPaint() }
-            function onLiveTemperatureChanged() { chart.requestPaint() }
           }
         }
       }

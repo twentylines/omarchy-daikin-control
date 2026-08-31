@@ -6839,7 +6839,6 @@ Panel {
           rangeHours: root.historyHours
           unit: root.unit
           connected: root.connected
-          liveTemperature: root.mainAmbientValue()
           sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
