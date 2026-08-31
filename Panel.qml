@@ -6527,9 +6527,9 @@ Panel {
                         id: splitPowerAmbientText
                         width: implicitWidth
                         text: splitPowerCard.connected
-                          ? ("AMBIENT " + root.formatTemperatureValue(
+                          ? root.formatTemperatureValue(
                               splitPowerCard.climate.ambient,
-                              splitPowerCard.climate.unit || root.unit)) : "..."
+                              splitPowerCard.climate.unit || root.unit) : "..."
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
