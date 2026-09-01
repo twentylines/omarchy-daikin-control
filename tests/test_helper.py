@@ -309,20 +309,91 @@ class HelperTests(unittest.TestCase):
             finally:
                 helper.CONFIG_PATH = original_path
 
-    def test_temperature_units_support_fahrenheit_and_gated_kelvin(self):
+    def test_keyboard_shortcuts_have_safe_defaults_and_normalize_keys(self):
+        defaults = helper.experimental_settings({})
+        self.assertFalse(defaults["shortcuts_enabled"])
+        self.assertEqual(defaults["shortcuts"]["open_panel"]["key"], "SUPER+ALT+A")
+        self.assertEqual(
+            helper.normalize_shortcut("shift + alt + ctrl + escape"),
+            "CTRL+ALT+SHIFT+ESC",
+        )
+        self.assertEqual(helper.normalize_shortcut("SUPER+ALT"), "")
+        self.assertEqual(helper.normalize_shortcut("SUPER+A+B"), "")
+
+    def test_keyboard_shortcuts_persist_and_generate_reversible_hyprland_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_config_path = helper.CONFIG_PATH
+            original_bindings_path = helper.HYPR_BINDINGS_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.HYPR_BINDINGS_PATH = Path(directory) / "hypr" / "bindings.lua"
+            helper.HYPR_BINDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.HYPR_BINDINGS_PATH.write_text("-- keep my bindings\n", encoding="utf-8")
+            reload_result = helper.subprocess.CompletedProcess(["hyprctl", "reload"], 0)
+            try:
+                config = {
+                    "url": "http://ha.local:8123",
+                    "token": "test-secret",
+                    "entity_id": "climate.office",
+                    "multi_unit_enabled": True,
+                    "global_sync_controls": False,
+                    "selected_entities": ["climate.office", "climate.bedroom"],
+                }
+                with patch.object(helper.subprocess, "run", return_value=reload_result):
+                    self.assertEqual(
+                        helper.sync_hyprland_shortcuts({**config, "shortcuts_enabled": True}),
+                        "",
+                    )
+                bindings = helper.HYPR_BINDINGS_PATH.read_text(encoding="utf-8")
+                self.assertIn("-- keep my bindings", bindings)
+                self.assertIn("sai.homeassistant-ac:open_panel", bindings)
+                self.assertIn("SUPER + ALT + P + 1", bindings)
+                self.assertIn("sai.homeassistant-ac:power_2", bindings)
+
+                globally_synced = helper.shortcut_bindings({
+                    **config, "shortcuts_enabled": True, "global_sync_controls": True
+                })
+                self.assertFalse(any("power_1" in line for line in globally_synced))
+
+                output = io.StringIO()
+                with patch.object(helper, "sync_hyprland_shortcuts", return_value=""), \
+                        contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "shortcut_open_panel", "shift + ctrl + b"
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue())["value"], "CTRL+SHIFT+B")
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["shortcuts"]["open_panel"]["key"], "CTRL+SHIFT+B")
+
+                output = io.StringIO()
+                with patch.object(helper, "sync_hyprland_shortcuts", return_value=""), \
+                        contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "reset_shortcuts", "default"
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(
+                    json.loads(output.getvalue())["shortcuts"],
+                    helper.shortcut_settings({}),
+                )
+
+                with patch.object(helper.subprocess, "run", return_value=reload_result):
+                    self.assertEqual(helper.sync_hyprland_shortcuts({}), "")
+                self.assertNotIn(helper.SHORTCUT_MARKER_START, helper.HYPR_BINDINGS_PATH.read_text(encoding="utf-8"))
+                self.assertIn("-- keep my bindings", helper.HYPR_BINDINGS_PATH.read_text(encoding="utf-8"))
+            finally:
+                helper.CONFIG_PATH = original_config_path
+                helper.HYPR_BINDINGS_PATH = original_bindings_path
+
+    def test_temperature_units_support_fahrenheit_and_kelvin_by_default(self):
         defaults = helper.experimental_settings({})
         self.assertEqual(defaults["temperature_unit"], "source")
-        self.assertFalse(defaults["experimental_kelvin_enabled"])
-
-        blocked_output = io.StringIO()
-        with contextlib.redirect_stdout(blocked_output):
-            result = helper.set_preference(
-                {"url": "http://ha.local:8123", "token": "test-secret"},
-                "temperature_unit",
-                "kelvin",
-            )
-        self.assertEqual(result, 1)
-        self.assertIn("Kelvin", json.loads(blocked_output.getvalue())["error"])
+        self.assertEqual(
+            helper.experimental_settings(
+                {"temperature_unit": "kelvin", "experimental_kelvin_enabled": False}
+            )["temperature_unit"],
+            "kelvin",
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             original_path = helper.CONFIG_PATH
@@ -332,7 +403,6 @@ class HelperTests(unittest.TestCase):
                     "url": "http://ha.local:8123",
                     "token": "test-secret",
                     "entity_id": "climate.office",
-                    "experimental_kelvin_enabled": True,
                 }
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
@@ -345,16 +415,8 @@ class HelperTests(unittest.TestCase):
                     result = helper.set_preference(config, "temperature_unit", "kelvin")
                 self.assertEqual(result, 0)
                 self.assertEqual(json.loads(output.getvalue())["value"], "kelvin")
-
-                output = io.StringIO()
-                with contextlib.redirect_stdout(output):
-                    result = helper.set_preference(config, "experimental_kelvin_enabled", "off")
-                self.assertEqual(result, 0)
-                parsed = json.loads(output.getvalue())
-                self.assertFalse(parsed["value"])
-                self.assertEqual(parsed["temperature_unit"], "source")
                 saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
-                self.assertEqual(saved["temperature_unit"], "source")
+                self.assertEqual(saved["temperature_unit"], "kelvin")
             finally:
                 helper.CONFIG_PATH = original_path
 
@@ -694,6 +756,26 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("COPY GUIDE", panel)
         self.assertIn("EXTERNAL_SERVER_HISTORY.md", panel)
 
+    def test_settings_sections_put_experimental_before_maintenance(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        start = panel.index("readonly property var settingsSections:")
+        end = panel.index("readonly property bool setupCanSubmit:", start)
+        section_model = panel[start:end]
+        values = [
+            "preferences",
+            "shortcuts",
+            "customisation",
+            "experimental",
+            "maintenance",
+        ]
+        positions = [section_model.index(f'value: "{value}"') for value in values]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_shortcut_display_uses_compact_arrow_symbols(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn('LEFT: "←", RIGHT: "→", UP: "↑", DOWN: "↓"', panel)
+        self.assertIn("return displayNames[part] || part", panel)
+
     def test_dropdown_trigger_toggles_using_visible_popup_state(self):
         dropdown = (HELPER.parent / "AcDropdown.qml").read_text(encoding="utf-8")
         self.assertIn("readonly property bool popupOpen: popup.visible", dropdown)
@@ -720,10 +802,23 @@ class HelperTests(unittest.TestCase):
         self.assertIn('{ value: "celsius", label: "CELSIUS" }', panel)
         self.assertIn('{ value: "fahrenheit", label: "FAHRENHEIT" }', panel)
         self.assertIn('{ value: "kelvin", label: "KELVIN" }', panel)
-        self.assertIn('label: "Kelvin option"', panel)
+        self.assertNotIn('label: "Kelvin option"', panel)
         self.assertNotIn('text: "EXTRA CUSTOMISATIONS"', panel)
         self.assertNotIn("Adjust the plugin's accent and visual finish.", panel)
         self.assertIn('label: "Extra customisations"', panel)
+        self.assertIn('text: "OPEN CUSTOMISATION"', panel)
+        self.assertIn('{ value: "customisation", label: "CUSTOMISATION" }', panel)
+        self.assertIn('{ value: "shortcuts", label: "SHORTCUTS" }', panel)
+        self.assertIn('id: shortcutsCard', panel)
+        self.assertIn('id: multiAcPowerShortcutsCard', panel)
+        self.assertIn('"RESET SHORTCUTS"', panel)
+        self.assertIn('fontSizeMode: Text.HorizontalFit', panel)
+        self.assertIn('text: "AMBIENT TEMPERATURE CHART"', panel)
+        self.assertIn('text: "HISTORY SOURCE"', panel)
+        self.assertIn('settingsSection === "customisation"', panel)
+        self.assertIn('id: appearanceOptionsComponent', panel)
+        self.assertIn('id: customisationCard', panel)
+        self.assertIn('id: customisationOptionsLoader', panel)
         self.assertIn("id: multiAirconOptionsCard", panel)
         self.assertIn("implicitHeight: multiAirconOptions.implicitHeight + Style.space(20)", panel)
         self.assertIn("borderSpec: Border.none()", panel)
@@ -753,6 +848,11 @@ class HelperTests(unittest.TestCase):
         self.assertIn("function addTemperatureGradientStops", chart)
         self.assertIn("root.addTemperatureGradientStops(lineGradient", chart)
         self.assertIn("33, 35", chart)
+        self.assertIn("function historySummary()", chart)
+        self.assertIn('{ key: "PEAK", label: "Peak" }', chart)
+        self.assertIn('{ key: "AVERAGE", label: "Average" }', chart)
+        self.assertIn('{ key: "LOW", label: "Low" }', chart)
+        self.assertIn('text: root.summaryValueText(summaryValue)', chart)
 
     def test_remote_history_path_is_written_to_the_logger_config(self):
         with tempfile.TemporaryDirectory() as directory:

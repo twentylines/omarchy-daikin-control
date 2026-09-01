@@ -46,6 +46,96 @@ REMOTE_HISTORY_DEFAULT_PATH = "~/.local/state/omarchy/homeassistant-ac-temperatu
 REMOTE_HISTORY_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:@\-\[\]]+$")
 REMOTE_HISTORY_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_./~\-]+$")
 REMOTE_HISTORY_IDENTITY_PATH = Path.home() / ".ssh/omarchy-homeassistant-ac"
+HYPR_BINDINGS_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config"))
+    / "hypr/bindings.lua"
+)
+SHORTCUT_APP_ID = "sai.homeassistant-ac"
+SHORTCUT_MARKER_START = "-- BEGIN sai.homeassistant-ac shortcuts (managed by plugin)"
+SHORTCUT_MARKER_END = "-- END sai.homeassistant-ac shortcuts (managed by plugin)"
+SHORTCUT_DEFAULTS: dict[str, dict[str, Any]] = {
+    "open_panel": {"key": "SUPER+ALT+A", "enabled": True},
+    "toggle_power": {"key": "SUPER+ALT+P", "enabled": True},
+    "open_settings": {"key": "SUPER+ALT+SHIFT+U", "enabled": True},
+    "settings_previous": {"key": "SUPER+CTRL+ALT+LEFT", "enabled": True},
+    "settings_next": {"key": "SUPER+CTRL+ALT+RIGHT", "enabled": True},
+    "refresh": {"key": "SUPER+ALT+R", "enabled": True},
+    "settings_back": {"key": "ESC", "enabled": True},
+}
+SHORTCUT_GLOBAL_ACTIONS = (
+    ("open_panel", "Open AC panel"),
+    ("toggle_power", "Toggle AC power"),
+    ("open_settings", "Open AC settings"),
+    ("settings_previous", "Previous AC settings pane"),
+    ("settings_next", "Next AC settings pane"),
+    ("refresh", "Refresh AC status"),
+)
+SHORTCUT_MODIFIER_ORDER = ("SUPER", "CTRL", "ALT", "SHIFT")
+SHORTCUT_MODIFIER_ALIASES = {
+    "SUPER": "SUPER",
+    "META": "SUPER",
+    "WIN": "SUPER",
+    "WINDOWS": "SUPER",
+    "CMD": "SUPER",
+    "CTRL": "CTRL",
+    "CONTROL": "CTRL",
+    "ALT": "ALT",
+    "OPTION": "ALT",
+    "OPT": "ALT",
+    "SHIFT": "SHIFT",
+}
+SHORTCUT_KEY_ALIASES = {
+    "ESCAPE": "ESC",
+    "RETURN": "ENTER",
+    "DEL": "DELETE",
+    "PGUP": "PAGEUP",
+    "PAGE_UP": "PAGEUP",
+    "PGDN": "PAGEDOWN",
+    "PAGE_DOWN": "PAGEDOWN",
+    "ARROWLEFT": "LEFT",
+    "LEFTARROW": "LEFT",
+    "ARROWRIGHT": "RIGHT",
+    "RIGHTARROW": "RIGHT",
+    "ARROWUP": "UP",
+    "UPARROW": "UP",
+    "ARROWDOWN": "DOWN",
+    "DOWNARROW": "DOWN",
+    "DOT": "PERIOD",
+    "GRAVE": "QUOTELEFT",
+}
+SHORTCUT_ALLOWED_KEYS = {
+    *"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    *"0123456789",
+    "ESC",
+    "ENTER",
+    "SPACE",
+    "TAB",
+    "LEFT",
+    "RIGHT",
+    "UP",
+    "DOWN",
+    "BACKSPACE",
+    "DELETE",
+    "HOME",
+    "END",
+    "PAGEUP",
+    "PAGEDOWN",
+    "INSERT",
+    "PRINT",
+    "COMMA",
+    "PERIOD",
+    "SLASH",
+    "SEMICOLON",
+    "APOSTROPHE",
+    "BRACKETLEFT",
+    "BRACKETRIGHT",
+    "BACKSLASH",
+    "MINUS",
+    "EQUAL",
+    "QUOTELEFT",
+    "PLUS",
+}
+SHORTCUT_ALLOWED_KEYS.update(f"F{index}" for index in range(1, 25))
 
 
 class HomeAssistantError(RuntimeError):
@@ -86,6 +176,195 @@ def preference_enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _parse_shortcut(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    parts = [part.strip() for part in re.split(r"\s*\+\s*", text)]
+    if not parts or any(not part for part in parts):
+        return ""
+
+    modifiers: set[str] = set()
+    key = ""
+    for part in parts:
+        modifier = SHORTCUT_MODIFIER_ALIASES.get(part)
+        if modifier:
+            if modifier in modifiers:
+                return ""
+            modifiers.add(modifier)
+            continue
+        normalized = SHORTCUT_KEY_ALIASES.get(part, part)
+        if key or (
+            normalized not in SHORTCUT_ALLOWED_KEYS
+            and not re.fullmatch(r"XF86_[A-Z0-9_]+", normalized)
+        ):
+            return ""
+        key = normalized
+    if not key:
+        return ""
+    ordered_modifiers = [item for item in SHORTCUT_MODIFIER_ORDER if item in modifiers]
+    return "+".join(ordered_modifiers + [key])
+
+
+def normalize_shortcut(value: Any, fallback: str = "") -> str:
+    normalized = _parse_shortcut(value)
+    if normalized:
+        return normalized
+    if fallback and str(fallback) != str(value):
+        return _parse_shortcut(fallback)
+    return ""
+
+
+def shortcut_settings(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = config.get("shortcuts")
+    result: dict[str, dict[str, Any]] = {}
+    for name, default in SHORTCUT_DEFAULTS.items():
+        item = raw.get(name) if isinstance(raw, dict) and isinstance(raw.get(name), dict) else {}
+        result[name] = {
+            "key": normalize_shortcut(item.get("key"), default["key"]),
+            "enabled": item.get("enabled", default["enabled"]) is not False,
+        }
+    return result
+
+
+def shortcut_hypr_sequence(value: str) -> str:
+    punctuation = {
+        "COMMA": "comma",
+        "PERIOD": "period",
+        "SLASH": "slash",
+        "SEMICOLON": "semicolon",
+        "APOSTROPHE": "apostrophe",
+        "BRACKETLEFT": "bracketleft",
+        "BRACKETRIGHT": "bracketright",
+        "BACKSLASH": "backslash",
+        "MINUS": "minus",
+        "EQUAL": "equal",
+        "QUOTELEFT": "grave",
+        "PLUS": "plus",
+    }
+    aliases = {"ESC": "ESCAPE", "ENTER": "RETURN"}
+    return " + ".join(
+        aliases.get(part, punctuation.get(part, part))
+        for part in normalize_shortcut(value).split("+")
+    )
+
+
+def _shortcut_binding_line(
+    key: str, action: str, description: str, hypr_sequence: str | None = None
+) -> str:
+    target = f"{SHORTCUT_APP_ID}:{action}"
+    return (
+        f"  hl.bind({json.dumps(hypr_sequence or shortcut_hypr_sequence(key))}, "
+        f"hl.dsp.global({json.dumps(target)}), "
+        f"{{ description = {json.dumps('Home Assistant AC: ' + description)} }})"
+    )
+
+
+def shortcut_bindings(config: dict[str, Any]) -> list[str]:
+    if not preference_enabled(config.get("shortcuts_enabled")):
+        return []
+    settings = shortcut_settings(config)
+    bindings: list[str] = []
+    for name, description in SHORTCUT_GLOBAL_ACTIONS:
+        item = settings[name]
+        if item["enabled"]:
+            bindings.append(_shortcut_binding_line(item["key"], name, description))
+
+    if (
+        settings["toggle_power"]["enabled"]
+        and preference_enabled(config.get("multi_unit_enabled"))
+        and not preference_enabled(config.get("global_sync_controls", True))
+    ):
+        selected = selected_entity_ids(config.get("selected_entities"), config.get("entity_id"))
+        if len(selected) < 2:
+            return bindings
+        base_key = settings["toggle_power"]["key"]
+        base_hypr_sequence = shortcut_hypr_sequence(base_key)
+        for index, entity_id in enumerate(selected[:9], start=1):
+            bindings.append(_shortcut_binding_line(
+                base_key,
+                f"power_{index}",
+                f"AC {index} power ({entity_id})",
+                f"{base_hypr_sequence} + {index}",
+            ))
+    return bindings
+
+
+def _shortcut_bindings_block(config: dict[str, Any]) -> str:
+    bindings = shortcut_bindings(config)
+    if not bindings:
+        return ""
+    return "\n".join([
+        SHORTCUT_MARKER_START,
+        "do",
+        *bindings,
+        "end",
+        SHORTCUT_MARKER_END,
+    ])
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        os.chmod(path, mode)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def sync_hyprland_shortcuts(config: dict[str, Any]) -> str:
+    """Keep the plugin's generated global binds inside a reversible marker block."""
+    try:
+        original = HYPR_BINDINGS_PATH.read_text(encoding="utf-8") \
+            if HYPR_BINDINGS_PATH.exists() else ""
+    except OSError as exc:
+        return f"Cannot read Hyprland bindings: {exc}"
+
+    marker_pattern = re.compile(
+        rf"(?ms)^[ \t]*{re.escape(SHORTCUT_MARKER_START)}\n.*?"
+        rf"^[ \t]*{re.escape(SHORTCUT_MARKER_END)}[ \t]*(?:\n|$)"
+    )
+    without_plugin_block = marker_pattern.sub("", original)
+    block = _shortcut_bindings_block(config)
+    updated = without_plugin_block
+    if block:
+        separator = "" if not updated or updated.endswith("\n") else "\n"
+        updated = updated + separator + block + "\n"
+    if updated == original:
+        return ""
+
+    try:
+        _write_text_atomic(HYPR_BINDINGS_PATH, updated)
+    except OSError as exc:
+        return f"Cannot save Hyprland bindings: {exc}"
+
+    try:
+        result = subprocess.run(
+            ["hyprctl", "reload"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"Bindings saved, but Hyprland could not reload: {exc}"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        return "Bindings saved, but Hyprland could not reload" + (
+            f": {detail[0]}" if detail else ""
+        )
+    return ""
 
 
 def temperature_display(value: Any) -> str:
@@ -208,19 +487,13 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         "average_temperature_decimals": preference_enabled(
             config.get("average_temperature_decimals", False)
         ),
-        "temperature_unit": (
-            "source"
-            if temperature_unit_preference(config.get("temperature_unit")) == "kelvin"
-            and not preference_enabled(config.get("experimental_kelvin_enabled"))
-            else temperature_unit_preference(config.get("temperature_unit"))
-        ),
-        "experimental_kelvin_enabled": preference_enabled(
-            config.get("experimental_kelvin_enabled", False)
-        ),
+        "temperature_unit": temperature_unit_preference(config.get("temperature_unit")),
         "selected_entities": selected,
         "bar_temperature_mode": bar_temperature_mode(config.get("bar_temperature_mode")),
         "bar_temperature_entities": display_entities,
         "experimental_history_enabled": preference_enabled(config.get("experimental_history_enabled")),
+        "shortcuts_enabled": preference_enabled(config.get("shortcuts_enabled", False)),
+        "shortcuts": shortcut_settings(config),
         "custom_appearance_enabled": preference_enabled(config.get("custom_appearance_enabled")),
         "appearance_auto_accent": preference_enabled(
             config.get("appearance_auto_accent", True)
@@ -1060,11 +1333,12 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "sync_non_power_controls": previous_experimental["sync_non_power_controls"],
         "average_temperature_decimals": previous_experimental["average_temperature_decimals"],
         "temperature_unit": previous_experimental["temperature_unit"],
-        "experimental_kelvin_enabled": previous_experimental["experimental_kelvin_enabled"],
         "selected_entities": selected_ids,
         "bar_temperature_mode": previous_experimental["bar_temperature_mode"],
         "bar_temperature_entities": previous_experimental["bar_temperature_entities"],
         "experimental_history_enabled": previous_experimental["experimental_history_enabled"],
+        "shortcuts_enabled": previous_experimental["shortcuts_enabled"],
+        "shortcuts": previous_experimental["shortcuts"],
         "custom_appearance_enabled": previous_experimental["custom_appearance_enabled"],
         "appearance_auto_accent": previous_experimental["appearance_auto_accent"],
         "appearance_accent": previous_experimental["appearance_accent"],
@@ -1083,6 +1357,8 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         save_config(config)
     except OSError as exc:
         return fail(f"Cannot save the Home Assistant configuration: {exc}", configured=False, url=url)
+    if preference_enabled(config.get("shortcuts_enabled")):
+        sync_hyprland_shortcuts(config)
 
     selected = next(item for item in entities if item["id"] == entity_id)
     return emit({
@@ -1311,6 +1587,8 @@ def set_entity(config: dict[str, Any], entity_id: str) -> int:
         save_config(config)
     except OSError as exc:
         return fail(f"Cannot save the AC configuration: {exc}")
+    if preference_enabled(config.get("shortcuts_enabled")):
+        sync_hyprland_shortcuts(config)
     return emit({"ok": True, "entity_id": entity_id})
 
 
@@ -1442,6 +1720,7 @@ def reset_app() -> int:
         except OSError as exc:
             return fail(f"Cannot reset Daikin Air data at {path}: {exc}")
         removed.append(str(path))
+    sync_hyprland_shortcuts({})
     return emit({"ok": True, "reset": True, "removed": removed})
 
 
@@ -1462,6 +1741,8 @@ def set_selection(config: dict[str, Any], payload: dict[str, Any]) -> int:
         save_config(config)
     except OSError as exc:
         return fail(f"Cannot save the selected air conditioners: {exc}")
+    if preference_enabled(config.get("shortcuts_enabled")):
+        sync_hyprland_shortcuts(config)
     return emit({
         "ok": True,
         "entity_id": active,
@@ -1497,6 +1778,39 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             return fail("Temperature history source must be local or server")
         value = value_text.lower()
         config[name] = value
+    elif name == "shortcuts_enabled":
+        if value_text.lower() not in {"on", "off"}:
+            return fail("Keyboard shortcuts must be on or off")
+        value = value_text.lower() == "on"
+        config[name] = value
+    elif name.startswith("shortcut_enabled_"):
+        shortcut_name = name[len("shortcut_enabled_"):]
+        if shortcut_name not in SHORTCUT_DEFAULTS:
+            return fail("Unknown keyboard shortcut")
+        if value_text.lower() not in {"on", "off"}:
+            return fail("Keyboard shortcuts must be on or off")
+        value = value_text.lower() == "on"
+        shortcuts = shortcut_settings(config)
+        shortcuts[shortcut_name]["enabled"] = value
+        config["shortcuts"] = shortcuts
+    elif name.startswith("shortcut_"):
+        shortcut_name = name[len("shortcut_"):]
+        if shortcut_name not in SHORTCUT_DEFAULTS:
+            return fail("Unknown keyboard shortcut")
+        value = normalize_shortcut(value_text)
+        if not value:
+            return fail(
+                "Shortcut must contain one key, optionally with modifiers, such as SUPER+ALT+A"
+            )
+        shortcuts = shortcut_settings(config)
+        shortcuts[shortcut_name]["key"] = value
+        config["shortcuts"] = shortcuts
+    elif name == "reset_shortcuts":
+        value = True
+        config["shortcuts"] = {
+            shortcut_name: dict(default)
+            for shortcut_name, default in SHORTCUT_DEFAULTS.items()
+        }
     elif name == "reset_appearance":
         value = True
         config["appearance_auto_accent"] = True
@@ -1511,12 +1825,10 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         value = temperature_unit_preference(value_text)
         if value not in {"celsius", "fahrenheit", "kelvin"}:
             return fail("Temperature unit must be Celsius, Fahrenheit, or Kelvin")
-        if value == "kelvin" and not preference_enabled(config.get("experimental_kelvin_enabled")):
-            return fail("Enable the Kelvin option in Experimental settings first")
         config[name] = value
     elif name in {
         "multi_unit_enabled", "global_sync_controls", "sync_non_power_controls",
-        "average_temperature_decimals", "experimental_kelvin_enabled",
+        "average_temperature_decimals",
         "experimental_history_enabled",
         "custom_appearance_enabled", "appearance_auto_accent",
         "appearance_device_colors_enabled",
@@ -1525,9 +1837,6 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             return fail(f"{name.replace('_', ' ').capitalize()} must be on or off")
         value = value_text.lower() == "on"
         config[name] = value
-        if name == "experimental_kelvin_enabled" and not value:
-            if temperature_unit_preference(config.get("temperature_unit")) == "kelvin":
-                config["temperature_unit"] = "source"
         if name == "multi_unit_enabled" and value:
             config["selected_entities"] = selected_entity_ids(
                 config.get("selected_entities"), config.get("entity_id")
@@ -1601,6 +1910,15 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         save_config(config)
     except OSError as exc:
         return fail(f"Cannot save the AC configuration: {exc}")
+    shortcut_sync_error = ""
+    if (
+        name == "shortcuts_enabled"
+        or name == "multi_unit_enabled"
+        or name == "global_sync_controls"
+        or name == "reset_shortcuts"
+        or name.startswith("shortcut_")
+    ):
+        shortcut_sync_error = sync_hyprland_shortcuts(config)
     response: dict[str, Any] = {"ok": True, "preference": name}
     if name == "history_range":
         response.update({
@@ -1611,13 +1929,19 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         response["value"] = value
         if name == "experimental_history_enabled":
             response["history_hours"], response["history_custom"] = effective_history_settings(config)
-        if name == "experimental_kelvin_enabled":
-            response["temperature_unit"] = experimental_settings(config)["temperature_unit"]
         if name == "reset_appearance":
             response.update({
                 "appearance_reset": True,
                 **experimental_settings(config),
             })
+    if (
+        name == "shortcuts_enabled"
+        or name == "reset_shortcuts"
+        or name.startswith("shortcut_")
+    ):
+        response["shortcuts"] = shortcut_settings(config)
+    if shortcut_sync_error:
+        response["shortcut_sync_error"] = shortcut_sync_error
     return emit(response)
 
 
@@ -1632,6 +1956,16 @@ def main(argv: list[str]) -> int:
         return reset_app()
     if action == "remote-history-source" and len(argv) == 2:
         return remote_history_source()
+    if action == "sync-shortcuts" and len(argv) == 2:
+        try:
+            config = load_config()
+        except HomeAssistantError as exc:
+            return fail(str(exc))
+        sync_error = sync_hyprland_shortcuts(config)
+        payload: dict[str, Any] = {"ok": True, "synced": sync_error == ""}
+        if sync_error:
+            payload["shortcut_sync_error"] = sync_error
+        return emit(payload)
     try:
         config = load_config()
         (
@@ -1732,7 +2066,7 @@ def main(argv: list[str]) -> int:
             "| set-mode <mode> [entity_id] | set-fan-mode <mode> [entity_id] "
             "| set-power <on|off> [entity_id] | turn-off-all | turn-on-all "
             "| install-remote-history | remote-history-source "
-            "| set-preference <name> <value> "
+            "| set-preference <name> <value> | sync-shortcuts "
             "| reset-app"
         )
     except MultipleClimateEntitiesError as exc:

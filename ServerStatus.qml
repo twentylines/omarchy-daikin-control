@@ -10,6 +10,7 @@ Item {
   property bool connected: false
   property real pingMs: -1
   property bool hideConnectedDot: false
+  property real statusSpacing: Style.space(5)
   property color goodColor: "#79B889"
   property color warningColor: "#D0A66A"
   property color urgentColor: Color.urgent
@@ -38,7 +39,7 @@ Item {
   Row {
     id: statusRow
     anchors.fill: parent
-    spacing: Style.space(5)
+    spacing: root.statusSpacing
 
     Item {
       width: root.connected && root.hideConnectedDot ? 0 : Style.space(8)

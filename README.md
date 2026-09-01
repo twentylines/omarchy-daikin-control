@@ -63,7 +63,7 @@ arguments or displayed in the bar.
   speeds.
 - Updates power controls optimistically while Home Assistant catches up; a
   pending request waits for the desired state and times out cleanly.
-- Provides **MasterSwitch** as a separately enabled, confirmed control for all
+- Provides a separately enabled, confirmed **MasterSwitch** for all
   available Home Assistant climate devices.
 - Records ambient temperature history locally, or on the external Home
   Assistant host.
@@ -75,18 +75,22 @@ arguments or displayed in the bar.
 ### Preferences
 
 - **Show climate controls** toggles the mode, fan, and temperature controls.
-- **MasterSwitch** is independent of the climate-controls toggle.
 - **Bar temperatures** chooses ambient, target, or both.
-- **Temperature unit** displays Celsius or Fahrenheit. Kelvin appears after
-  enabling its experimental option.
-- **History source** chooses **LOCAL** or **EXTERNAL SERVER**, and the history
-  toggle controls the chart.
+- **Temperature unit** displays Celsius, Fahrenheit, or Kelvin.
+- **Ambient temperature chart** controls whether the chart is shown in the
+  main panel.
+- **History source** chooses **LOCAL** or **EXTERNAL SERVER** for its log.
+- **Customisation** appears after enabling **Extra customisations** in
+  Experimental, keeping appearance controls together in their own settings
+  section.
 
 Local history is recorded while this PC is available. The chart keeps up to
 31 days. Long recordings are better suited to the external logger.
 
 ### Experimental
 
+- **MasterSwitch** is a single guarded power button for every available AC,
+  independent of the climate-controls toggle.
 - **Multiple air conditioners** adds selected entities below the main
   selector.
 - **Globally synced controls** applies shared controls to all selected ACs.
@@ -95,19 +99,16 @@ Local history is recorded while this PC is available. The chart keeps up to
   remains individual.
 - The bar temperature can show the average, all selected values, one unit, or a
   chosen subset. The main panel keeps the normal ambient-temperature card.
-- **Decimal average** is off by default so averaged temperatures stay compact;
-  enable it to show one decimal place.
+- **Decimal average** controls whether averaged multi-AC values show one decimal;
+  it is off by default so the bar stays compact.
 - **Extended chart history** adds 7-day, 30-day, and custom ranges up to
   744 hours. An always-on external logger is recommended for long recordings.
-- **Kelvin option** adds Kelvin to the temperature-unit choices.
-- **Extra customisations** enables adjustable transparency, blur, corner radius, and
-  a fixed accent colour, plus a separate colour for switches, sliders, hover
-  feedback, and selected states. **Per-device colours** can give each selected
-  AC card its own accent. The **Auto · Omarchy accent** switch follows the
-  current Omarchy colour and suspends these custom colours. **Reset
-  customisations** restores the default visual values without changing whether
-  the feature is enabled. The corner radius applies consistently across the
-  plugin's surfaces and controls.
+- **Extra customisations** enables the dedicated **Customisation** section for
+  adjustable transparency, blur, corner radius, and colour controls.
+- **Keyboard shortcuts** enables a dedicated **Shortcuts** section where each
+  shortcut can be edited or disabled. **Reset shortcuts** restores the defaults.
+- With multiple ACs and **Globally synced controls** off, the power shortcut
+  followed by **1–9** targets an individual selected AC.
 
 Experimental options are optional extras; some details may be less polished.
 

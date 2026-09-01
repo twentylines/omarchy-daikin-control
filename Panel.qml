@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -47,14 +48,45 @@ Panel {
   property bool averageTemperatureDecimalsPrevious: false
   property string temperatureUnitPreference: "source"
   property string temperatureUnitPreferencePrevious: "source"
-  property bool experimentalKelvinEnabled: false
-  property bool experimentalKelvinEnabledPrevious: false
   property string barTemperatureMode: "average"
   property string barTemperatureModePrevious: "average"
   property var barTemperatureEntities: []
   property var barTemperatureEntitiesPrevious: []
   property bool experimentalHistoryEnabled: false
   property bool experimentalHistoryEnabledPrevious: false
+  readonly property string globalShortcutAppId: "sai.homeassistant-ac"
+  readonly property var shortcutDefaults: ({
+    open_panel: { key: "SUPER+ALT+A", enabled: true },
+    toggle_power: { key: "SUPER+ALT+P", enabled: true },
+    open_settings: { key: "SUPER+ALT+SHIFT+U", enabled: true },
+    settings_previous: { key: "SUPER+CTRL+ALT+LEFT", enabled: true },
+    settings_next: { key: "SUPER+CTRL+ALT+RIGHT", enabled: true },
+    refresh: { key: "SUPER+ALT+R", enabled: true },
+    settings_back: { key: "ESC", enabled: true },
+  })
+  readonly property var shortcutDefinitions: [
+    { id: "open_panel", label: "OPEN PANEL", description: "Show the AC panel from anywhere.", scope: "GLOBAL" },
+    { id: "toggle_power", label: "TOGGLE AC POWER", description: "Toggle the main AC power state.", scope: "GLOBAL" },
+    { id: "open_settings", label: "OPEN SETTINGS", description: "Open this panel directly on its settings view.", scope: "GLOBAL" },
+    { id: "settings_previous", label: "PREVIOUS SETTINGS PANE", description: "Move to the previous settings pane.", scope: "GLOBAL" },
+    { id: "settings_next", label: "NEXT SETTINGS PANE", description: "Move to the next settings pane.", scope: "GLOBAL" },
+    { id: "refresh", label: "REFRESH STATUS", description: "Refresh the Home Assistant status.", scope: "GLOBAL" },
+    { id: "settings_back", label: "BACK TO AC CONTROLS", description: "Return from settings. Esc is the default.", scope: "PANEL" },
+  ]
+  property bool shortcutsEnabled: false
+  property bool shortcutsEnabledPrevious: false
+  property var shortcutValues: ({
+    open_panel: { key: "SUPER+ALT+A", enabled: true },
+    toggle_power: { key: "SUPER+ALT+P", enabled: true },
+    open_settings: { key: "SUPER+ALT+SHIFT+U", enabled: true },
+    settings_previous: { key: "SUPER+CTRL+ALT+LEFT", enabled: true },
+    settings_next: { key: "SUPER+CTRL+ALT+RIGHT", enabled: true },
+    refresh: { key: "SUPER+ALT+R", enabled: true },
+    settings_back: { key: "ESC", enabled: true },
+  })
+  property var shortcutValuesPrevious: ({})
+  property string shortcutCaptureId: ""
+  readonly property bool shortcutCaptureActive: shortcutCaptureId !== ""
   property bool customAppearanceEnabled: false
   property bool customAppearanceEnabledPrevious: false
   property bool appearanceAutoAccent: true
@@ -252,6 +284,236 @@ Panel {
     return next
   }
 
+  function copyShortcutValues(source) {
+    var next = {}
+    var current = source || shortcutValues || shortcutDefaults
+    for (var id in current) {
+      var item = current[id] || ({})
+      next[id] = {
+        key: String(item.key || ""),
+        enabled: item.enabled !== false,
+      }
+    }
+    return next
+  }
+
+  function normalizeShortcutKey(value, fallback) {
+    var raw = String(value || "").trim().toUpperCase()
+    var fallbackText = String(fallback || "")
+    if (raw === "")
+      return fallbackText !== "" ? root.normalizeShortcutKey(fallbackText, "") : ""
+
+    var aliases = {
+      META: "SUPER",
+      WIN: "SUPER",
+      WINDOWS: "SUPER",
+      CMD: "SUPER",
+      CONTROL: "CTRL",
+      OPTION: "ALT",
+      OPT: "ALT",
+      ESCAPE: "ESC",
+      RETURN: "ENTER",
+      DEL: "DELETE",
+      PGUP: "PAGEUP",
+      PAGE_UP: "PAGEUP",
+      PGDN: "PAGEDOWN",
+      PAGE_DOWN: "PAGEDOWN",
+      ARROWLEFT: "LEFT",
+      LEFTARROW: "LEFT",
+      ARROWRIGHT: "RIGHT",
+      RIGHTARROW: "RIGHT",
+      ARROWUP: "UP",
+      UPARROW: "UP",
+      ARROWDOWN: "DOWN",
+      DOWNARROW: "DOWN",
+      DOT: "PERIOD",
+      GRAVE: "QUOTELEFT",
+    }
+    var modifierAliases = {
+      SUPER: "SUPER",
+      META: "SUPER",
+      WIN: "SUPER",
+      WINDOWS: "SUPER",
+      CMD: "SUPER",
+      CTRL: "CTRL",
+      CONTROL: "CTRL",
+      ALT: "ALT",
+      OPTION: "ALT",
+      OPT: "ALT",
+      SHIFT: "SHIFT",
+    }
+    var modifierOrder = ["SUPER", "CTRL", "ALT", "SHIFT"]
+    var allowed = {
+      ESC: true, ENTER: true, SPACE: true, TAB: true,
+      LEFT: true, RIGHT: true, UP: true, DOWN: true,
+      BACKSPACE: true, DELETE: true, HOME: true, END: true,
+      PAGEUP: true, PAGEDOWN: true, INSERT: true, PRINT: true,
+      COMMA: true, PERIOD: true, SLASH: true, SEMICOLON: true,
+      APOSTROPHE: true, BRACKETLEFT: true, BRACKETRIGHT: true,
+      BACKSLASH: true, MINUS: true, EQUAL: true, QUOTELEFT: true,
+      PLUS: true,
+    }
+    var parts = raw.split(/\s*\+\s*/)
+    var modifiers = []
+    var key = ""
+    for (var i = 0; i < parts.length; i++) {
+      var part = String(parts[i] || "").trim()
+      if (part === "") {
+        key = ""
+        break
+      }
+      var modifier = modifierAliases[part]
+      if (modifier) {
+        if (modifiers.indexOf(modifier) >= 0) {
+          key = ""
+          break
+        }
+        modifiers.push(modifier)
+        continue
+      }
+      var normalized = aliases[part] || part
+      var isLetterOrNumber = /^[A-Z0-9]$/.test(normalized)
+      var isFunctionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(normalized)
+      var isXf86Key = /^XF86_[A-Z0-9_]+$/.test(normalized)
+      if (key !== "" || (!allowed[normalized] && !isLetterOrNumber
+          && !isFunctionKey && !isXf86Key)) {
+        key = ""
+        break
+      }
+      key = normalized
+    }
+    if (key === "")
+      return fallbackText !== "" && fallbackText !== String(value || "")
+        ? root.normalizeShortcutKey(fallbackText, "") : ""
+    var ordered = []
+    for (var j = 0; j < modifierOrder.length; j++) {
+      if (modifiers.indexOf(modifierOrder[j]) >= 0) ordered.push(modifierOrder[j])
+    }
+    ordered.push(key)
+    return ordered.join("+")
+  }
+
+  function normalizeShortcutValues(value) {
+    var source = value && typeof value === "object" && !Array.isArray(value) ? value : ({})
+    var next = {}
+    for (var i = 0; i < shortcutDefinitions.length; i++) {
+      var definition = shortcutDefinitions[i]
+      var id = definition.id
+      var item = source[id]
+      if (typeof item === "string") item = { key: item }
+      item = item && typeof item === "object" ? item : ({})
+      var fallback = shortcutDefaults[id] || ({ key: "", enabled: true })
+      next[id] = {
+        key: root.normalizeShortcutKey(item.key, fallback.key),
+        enabled: item.enabled !== false,
+      }
+    }
+    return next
+  }
+
+  function shortcutValue(name) {
+    var item = shortcutValues && shortcutValues[name]
+    var fallback = shortcutDefaults[name] || ({ key: "", enabled: true })
+    return root.normalizeShortcutKey(item ? item.key : "", fallback.key)
+  }
+
+  function shortcutEnabled(name) {
+    var item = shortcutValues && shortcutValues[name]
+    return !item || item.enabled !== false
+  }
+
+  function shortcutStatus(name) {
+    if (!root.shortcutsEnabled) return "PAUSED"
+    return root.shortcutEnabled(name) ? "ACTIVE" : "DISABLED"
+  }
+
+  function shortcutDisplay(value) {
+    var normalized = root.normalizeShortcutKey(value, "")
+    if (normalized === "") return "NOT SET"
+    var displayNames = {
+      LEFT: "←", RIGHT: "→", UP: "↑", DOWN: "↓",
+    }
+    return normalized.split("+").map(function(part) {
+      return displayNames[part] || part
+    }).join(" + ")
+  }
+
+  function shortcutQmlSequence(value) {
+    var normalized = root.normalizeShortcutKey(value, "")
+    if (normalized === "") return ""
+    var names = {
+      SUPER: "Meta", CTRL: "Ctrl", ALT: "Alt", SHIFT: "Shift",
+      ESC: "Escape", ENTER: "Return", SPACE: "Space", TAB: "Tab",
+      LEFT: "Left", RIGHT: "Right", UP: "Up", DOWN: "Down",
+      BACKSPACE: "Backspace", DELETE: "Delete", HOME: "Home", END: "End",
+      PAGEUP: "PageUp", PAGEDOWN: "PageDown", INSERT: "Insert", PRINT: "Print",
+      COMMA: ",", PERIOD: ".", SLASH: "/", SEMICOLON: ";",
+      APOSTROPHE: "'", BRACKETLEFT: "[", BRACKETRIGHT: "]",
+      BACKSLASH: "\\", MINUS: "-", EQUAL: "=", QUOTELEFT: "`", PLUS: "+",
+    }
+    return normalized.split("+").map(function(part) {
+      return names[part] || part
+    }).join("+")
+  }
+
+  function shortcutKeyName(key) {
+    if (key >= Qt.Key_A && key <= Qt.Key_Z)
+      return String.fromCharCode("A".charCodeAt(0) + key - Qt.Key_A)
+    if (key >= Qt.Key_0 && key <= Qt.Key_9)
+      return String.fromCharCode("0".charCodeAt(0) + key - Qt.Key_0)
+    if (key >= Qt.Key_F1 && key <= Qt.Key_F24)
+      return "F" + String(key - Qt.Key_F1 + 1)
+    if (key === Qt.Key_Escape) return "ESC"
+    if (key === Qt.Key_Return || key === Qt.Key_Enter) return "ENTER"
+    if (key === Qt.Key_Space) return "SPACE"
+    if (key === Qt.Key_Tab) return "TAB"
+    if (key === Qt.Key_Left) return "LEFT"
+    if (key === Qt.Key_Right) return "RIGHT"
+    if (key === Qt.Key_Up) return "UP"
+    if (key === Qt.Key_Down) return "DOWN"
+    if (key === Qt.Key_Backspace) return "BACKSPACE"
+    if (key === Qt.Key_Delete) return "DELETE"
+    if (key === Qt.Key_Home) return "HOME"
+    if (key === Qt.Key_End) return "END"
+    if (key === Qt.Key_PageUp) return "PAGEUP"
+    if (key === Qt.Key_PageDown) return "PAGEDOWN"
+    if (key === Qt.Key_Insert) return "INSERT"
+    if (key === Qt.Key_Print) return "PRINT"
+    if (key === Qt.Key_Comma) return "COMMA"
+    if (key === Qt.Key_Period) return "PERIOD"
+    if (key === Qt.Key_Slash) return "SLASH"
+    if (key === Qt.Key_Semicolon) return "SEMICOLON"
+    if (key === Qt.Key_Apostrophe) return "APOSTROPHE"
+    if (key === Qt.Key_BracketLeft) return "BRACKETLEFT"
+    if (key === Qt.Key_BracketRight) return "BRACKETRIGHT"
+    if (key === Qt.Key_Backslash) return "BACKSLASH"
+    if (key === Qt.Key_Minus) return "MINUS"
+    if (key === Qt.Key_Equal) return "EQUAL"
+    if (key === Qt.Key_QuoteLeft) return "QUOTELEFT"
+    if (key === Qt.Key_Plus) return "PLUS"
+    return ""
+  }
+
+  function shortcutFromEvent(event) {
+    var key = root.shortcutKeyName(event.key)
+    if (key === "") return ""
+    var modifiers = []
+    if ((event.modifiers & Qt.MetaModifier) !== 0) modifiers.push("SUPER")
+    if ((event.modifiers & Qt.ControlModifier) !== 0) modifiers.push("CTRL")
+    if ((event.modifiers & Qt.AltModifier) !== 0) modifiers.push("ALT")
+    if ((event.modifiers & Qt.ShiftModifier) !== 0) modifiers.push("SHIFT")
+    return root.normalizeShortcutKey(modifiers.concat([key]).join("+"), "")
+  }
+
+  function captureShortcut(name, event) {
+    if (root.shortcutCaptureId !== name || root.preferenceBusy) return
+    var captured = root.shortcutFromEvent(event)
+    event.accepted = true
+    if (captured === "") return
+    root.shortcutCaptureId = ""
+    root.setShortcut(name, captured)
+  }
+
   function appearanceColorIndex(entityId) {
     var id = String(entityId || "")
     var index = selectedEntities.indexOf(id)
@@ -318,9 +580,14 @@ Panel {
   ] : [])
   readonly property var settingsSections: [
     { value: "preferences", label: "PREFERENCES" },
+  ].concat(shortcutsEnabled ? [
+    { value: "shortcuts", label: "SHORTCUTS" },
+  ] : []).concat(customAppearanceEnabled ? [
+    { value: "customisation", label: "CUSTOMISATION" },
+  ] : []).concat([
     { value: "experimental", label: "EXPERIMENTAL" },
     { value: "maintenance", label: "MAINTENANCE" },
-  ]
+  ])
   readonly property bool setupCanSubmit: !setupBusy
     && !preferenceBusy
     && !localServerBusy
@@ -366,7 +633,6 @@ Panel {
   readonly property string sourceTemperatureUnitCode: root.temperatureUnitCode(unit)
   readonly property string displayTemperatureUnitCode: {
     var requested = root.normalizeTemperatureUnitPreference(temperatureUnitPreference)
-    if (requested === "kelvin" && !experimentalKelvinEnabled) requested = "source"
     return requested === "source" ? sourceTemperatureUnitCode : requested
   }
   readonly property string displayTemperatureUnit: root.temperatureUnitSymbol(displayTemperatureUnitCode)
@@ -1066,12 +1332,6 @@ Panel {
     averageTemperatureDecimalsPrevious = averageTemperatureDecimals
     temperatureUnitPreference = root.normalizeTemperatureUnitPreference(parsed.temperature_unit)
     temperatureUnitPreferencePrevious = temperatureUnitPreference
-    experimentalKelvinEnabled = parsed.experimental_kelvin_enabled === true
-    experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
-    if (!experimentalKelvinEnabled && temperatureUnitPreference === "kelvin") {
-      temperatureUnitPreference = "source"
-      temperatureUnitPreferencePrevious = temperatureUnitPreference
-    }
     selectedEntities = normalizeSelectedEntities(parsed.selected_entities, selectedEntity)
     var parsedBarMode = String(parsed.bar_temperature_mode || "average")
     barTemperatureMode = ["average", "all", "selected"].indexOf(parsedBarMode) >= 0
@@ -1082,6 +1342,12 @@ Panel {
     barTemperatureEntitiesPrevious = barTemperatureEntities.slice()
     experimentalHistoryEnabled = parsed.experimental_history_enabled === true
     experimentalHistoryEnabledPrevious = experimentalHistoryEnabled
+    shortcutsEnabled = parsed.shortcuts_enabled === true
+    shortcutsEnabledPrevious = shortcutsEnabled
+    shortcutValues = normalizeShortcutValues(parsed.shortcuts)
+    shortcutValuesPrevious = copyShortcutValues(shortcutValues)
+    if (!shortcutsEnabled && settingsSection === "shortcuts") settingsSection = "experimental"
+    if (shortcutsEnabled) Qt.callLater(root.syncShortcutBindings)
     customAppearanceEnabled = parsed.custom_appearance_enabled === true
     customAppearanceEnabledPrevious = customAppearanceEnabled
     appearanceAutoAccent = parsed.appearance_auto_accent !== false
@@ -1135,6 +1401,45 @@ Panel {
     root.refresh()
   }
 
+  function navigateSettings(direction) {
+    var sections = root.settingsSections
+    if (!sections || sections.length === 0) return
+    var current = -1
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].value === root.settingsSection) {
+        current = i
+        break
+      }
+    }
+    if (current < 0) current = 0
+    var next = current + (Number(direction) < 0 ? -1 : 1)
+    if (next < 0) next = sections.length - 1
+    if (next >= sections.length) next = 0
+    root.settingsSection = sections[next].value
+  }
+
+  function openSettingsFromShortcut() {
+    root.controller.show()
+    root.loadConfig()
+    root.refresh()
+    Qt.callLater(function() {
+      if (!root.setupOpen) root.openSetup()
+    })
+  }
+
+  function navigateSettingsFromShortcut(direction) {
+    root.controller.show()
+    root.loadConfig()
+    root.refresh()
+    Qt.callLater(function() {
+      if (!root.configured) return
+      if (!root.setupOpen) root.openSetup()
+      Qt.callLater(function() {
+        if (root.setupOpen) root.navigateSettings(direction)
+      })
+    })
+  }
+
   function open() { root.openFromHotkey() }
   function close() { root.controller.hide() }
   function toggle() { root.opened ? root.close() : root.openFromHotkey() }
@@ -1173,6 +1478,12 @@ Panel {
       entitiesProcess.running = true
     }
     root.refreshStatus()
+  }
+
+  function syncShortcutBindings() {
+    if (!root.shortcutsEnabled || shortcutSyncProcess.running) return
+    shortcutSyncProcess.command = ["python3", root.helperPath, "sync-shortcuts"]
+    shortcutSyncProcess.running = true
   }
 
   function openSetup() {
@@ -1792,8 +2103,6 @@ Panel {
         averageTemperatureDecimalsPrevious = false
         temperatureUnitPreference = "source"
         temperatureUnitPreferencePrevious = "source"
-        experimentalKelvinEnabled = false
-        experimentalKelvinEnabledPrevious = false
         selectedEntities = []
         barTemperatureMode = "average"
         barTemperatureModePrevious = "average"
@@ -1801,6 +2110,11 @@ Panel {
         barTemperatureEntitiesPrevious = []
         experimentalHistoryEnabled = false
         experimentalHistoryEnabledPrevious = false
+        shortcutsEnabled = false
+        shortcutsEnabledPrevious = false
+        shortcutValues = normalizeShortcutValues(shortcutDefaults)
+        shortcutValuesPrevious = copyShortcutValues(shortcutValues)
+        shortcutCaptureId = ""
         customAppearanceEnabled = false
         customAppearanceEnabledPrevious = false
         appearanceAutoAccent = true
@@ -2460,8 +2774,7 @@ Panel {
   function setTemperatureUnit(value) {
     if (preferenceProcess.running) return
     var next = root.normalizeTemperatureUnitPreference(value)
-    if (["celsius", "fahrenheit"].indexOf(next) < 0
-        && !(next === "kelvin" && experimentalKelvinEnabled)) return
+    if (["celsius", "fahrenheit", "kelvin"].indexOf(next) < 0) return
     if (next === temperatureUnitPreference) return
     temperatureUnitPreferencePrevious = temperatureUnitPreference
     temperatureUnitPreference = next
@@ -2529,15 +2842,6 @@ Panel {
     root.beginPreference("average_temperature_decimals", next ? "on" : "off")
   }
 
-  function setExperimentalKelvinEnabled(value) {
-    if (preferenceProcess.running) return
-    var next = value === true
-    if (next === experimentalKelvinEnabled) return
-    experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
-    experimentalKelvinEnabled = next
-    root.beginPreference("experimental_kelvin_enabled", next ? "on" : "off")
-  }
-
   function setBarTemperatureMode(value) {
     if (preferenceProcess.running) return
     var next = String(value || "").toLowerCase()
@@ -2570,12 +2874,61 @@ Panel {
     root.beginPreference("experimental_history_enabled", next ? "on" : "off")
   }
 
+  function setShortcutsEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === root.shortcutsEnabled) return
+    shortcutsEnabledPrevious = root.shortcutsEnabled
+    shortcutsEnabled = next
+    if (!next) shortcutCaptureId = ""
+    if (!next && settingsSection === "shortcuts") settingsSection = "experimental"
+    root.beginPreference("shortcuts_enabled", next ? "on" : "off")
+  }
+
+  function setShortcutEnabled(name, value) {
+    if (preferenceProcess.running || !shortcutDefaults[name]) return
+    var next = value === true
+    var current = root.shortcutValues[name]
+    if (current && (current.enabled !== false) === next) return
+    shortcutValuesPrevious = root.copyShortcutValues()
+    var updated = root.copyShortcutValues()
+    updated[name].enabled = next
+    shortcutValues = updated
+    root.beginPreference("shortcut_enabled_" + name, next ? "on" : "off")
+  }
+
+  function setShortcut(name, value) {
+    if (preferenceProcess.running || !shortcutDefaults[name]) return
+    var next = root.normalizeShortcutKey(value, "")
+    if (next === "") return
+    if (root.shortcutValue(name) === next) return
+    shortcutValuesPrevious = root.copyShortcutValues()
+    var updated = root.copyShortcutValues()
+    updated[name].key = next
+    shortcutValues = updated
+    root.beginPreference("shortcut_" + name, next)
+  }
+
+  function resetShortcuts() {
+    if (preferenceProcess.running) return
+    shortcutCaptureId = ""
+    shortcutValuesPrevious = root.copyShortcutValues()
+    shortcutValues = root.normalizeShortcutValues(shortcutDefaults)
+    preferenceKind = "reset_shortcuts"
+    preferenceBusy = true
+    preferenceProcess.command = [
+      "python3", root.helperPath, "set-preference", "reset_shortcuts", "default"
+    ]
+    preferenceProcess.running = true
+  }
+
   function setCustomAppearanceEnabled(value) {
     if (preferenceProcess.running) return
     var next = value === true
     if (next === customAppearanceEnabled) return
     customAppearanceEnabledPrevious = customAppearanceEnabled
     customAppearanceEnabled = next
+    if (settingsSection === "customisation") settingsSection = "experimental"
     root.beginPreference("custom_appearance_enabled", next ? "on" : "off")
   }
 
@@ -2745,12 +3098,16 @@ Panel {
       averageTemperatureDecimals = averageTemperatureDecimalsPrevious
     else if (kind === "temperature_unit")
       temperatureUnitPreference = temperatureUnitPreferencePrevious
-    else if (kind === "experimental_kelvin_enabled")
-      experimentalKelvinEnabled = experimentalKelvinEnabledPrevious
     else if (kind === "bar_temperature_mode") barTemperatureMode = barTemperatureModePrevious
     else if (kind === "bar_temperature_entities") barTemperatureEntities = barTemperatureEntitiesPrevious.slice()
     else if (kind === "experimental_history_enabled")
       experimentalHistoryEnabled = experimentalHistoryEnabledPrevious
+    else if (kind === "shortcuts_enabled") shortcutsEnabled = shortcutsEnabledPrevious
+    else if (kind === "reset_shortcuts")
+      shortcutValues = copyShortcutValues(shortcutValuesPrevious)
+    else if (kind.indexOf("shortcut_enabled_") === 0
+        || kind.indexOf("shortcut_") === 0)
+      shortcutValues = copyShortcutValues(shortcutValuesPrevious)
     else if (kind === "custom_appearance_enabled") customAppearanceEnabled = customAppearanceEnabledPrevious
     else if (kind === "appearance_auto_accent") appearanceAutoAccent = appearanceAutoAccentPrevious
     else if (kind === "appearance_accent") {
@@ -2791,9 +3148,6 @@ Panel {
     } else if (name === "temperature_unit") {
       temperatureUnitPreference = root.normalizeTemperatureUnitPreference(value)
       temperatureUnitPreferencePrevious = temperatureUnitPreference
-    } else if (name === "experimental_kelvin_enabled") {
-      experimentalKelvinEnabled = value === true
-      experimentalKelvinEnabledPrevious = experimentalKelvinEnabled
     } else if (name === "bar_temperature_mode") {
       var nextBarMode = String(value || "average")
       barTemperatureMode = ["average", "all", "selected"].indexOf(nextBarMode) >= 0
@@ -2805,6 +3159,24 @@ Panel {
     } else if (name === "experimental_history_enabled") {
       experimentalHistoryEnabled = value === true
       experimentalHistoryEnabledPrevious = experimentalHistoryEnabled
+    } else if (name === "shortcuts_enabled") {
+      shortcutsEnabled = value === true
+      shortcutsEnabledPrevious = shortcutsEnabled
+    } else if (name.indexOf("shortcut_enabled_") === 0) {
+      var enabledShortcutName = name.slice("shortcut_enabled_".length)
+      if (!shortcutDefaults[enabledShortcutName]) return false
+      var enabledShortcutValues = copyShortcutValues()
+      enabledShortcutValues[enabledShortcutName].enabled = value === true
+      shortcutValues = enabledShortcutValues
+      shortcutValuesPrevious = copyShortcutValues()
+    } else if (name.indexOf("shortcut_") === 0) {
+      var keyShortcutName = name.slice("shortcut_".length)
+      if (!shortcutDefaults[keyShortcutName]) return false
+      var keyShortcut = root.normalizeShortcutKey(value, shortcutDefaults[keyShortcutName].key)
+      var keyShortcutValues = copyShortcutValues()
+      keyShortcutValues[keyShortcutName].key = keyShortcut
+      shortcutValues = keyShortcutValues
+      shortcutValuesPrevious = copyShortcutValues()
     } else if (name === "custom_appearance_enabled") {
       customAppearanceEnabled = value === true
       customAppearanceEnabledPrevious = customAppearanceEnabled
@@ -2855,7 +3227,13 @@ Panel {
     try {
       var parsed = JSON.parse(text)
       if (parsed && parsed.ok === true) {
-        if (parsed.preference === "reset_appearance" && parsed.appearance_reset === true) {
+        if (parsed.preference === "reset_shortcuts" && parsed.shortcuts !== undefined) {
+          shortcutValues = root.normalizeShortcutValues(parsed.shortcuts)
+          shortcutValuesPrevious = root.copyShortcutValues(shortcutValues)
+          shortcutCaptureId = ""
+          setupError = ""
+          return
+        } else if (parsed.preference === "reset_appearance" && parsed.appearance_reset === true) {
           customAppearanceEnabled = parsed.custom_appearance_enabled === true
           customAppearanceEnabledPrevious = customAppearanceEnabled
           appearanceAutoAccent = parsed.appearance_auto_accent !== false
@@ -2915,10 +3293,6 @@ Panel {
             historyHoursPrevious = historyHours
             historyCustomPrevious = historyCustom
             customHistoryHoursText = root.formatHours(historyHours)
-          } else if (parsed.preference === "experimental_kelvin_enabled"
-              && parsed.temperature_unit !== undefined) {
-            temperatureUnitPreference = root.normalizeTemperatureUnitPreference(parsed.temperature_unit)
-            temperatureUnitPreferencePrevious = temperatureUnitPreference
           }
         } else {
           root.restorePreference(preferenceKind)
@@ -3028,6 +3402,30 @@ Panel {
     root.requestPower(isOn ? "off" : "on", true)
   }
 
+  function toggleUnitPowerShortcut(slot) {
+    if (!root.shortcutsEnabled || !root.shortcutEnabled("toggle_power")
+        || !root.multiUnitEnabled || root.globalSyncControls
+        || root.masterSwitchBusy || !root.connected) return
+    var index = Number(slot)
+    if (!isFinite(index) || index < 1 || index > 9
+        || index > root.selectedEntities.length) return
+    var id = String(root.selectedEntities[index - 1] || "")
+    var climate = root.unitReading(id)
+    if (!climate) {
+      root.refresh()
+      return
+    }
+    var state = root.unitLocalState(id)
+    if (state.power && state.powerCanCancel === true && state.powerTimedOut !== true) {
+      root.cancelUnitPower(id)
+      return
+    }
+    var observedState = String(climate.state || "").toLowerCase()
+    var isUnitOn = state.power === "turning_on"
+      || (state.power !== "turning_off" && observedState !== "off")
+    root.requestUnitPower(id, isUnitOn ? "off" : "on", true)
+  }
+
   function cancelPower() {
     if (masterSwitchBusy || !connected || !hasLocalPower || powerTimedOut || !powerCanCancel) return
     var dueAt = Date.now()
@@ -3045,6 +3443,29 @@ Panel {
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: if (String(text || "").trim() !== "") console.warn("aircon-control", text.trim())
+    }
+  }
+
+  Process {
+    id: shortcutSyncProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var output = String(text || "").trim()
+        if (output !== "") {
+          try {
+            var parsed = JSON.parse(output)
+            if (parsed.shortcut_sync_error)
+              console.warn("aircon-control shortcuts", parsed.shortcut_sync_error)
+          } catch (error) {
+            console.warn("aircon-control shortcuts", output)
+          }
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("aircon-control shortcuts", text.trim())
     }
   }
 
@@ -3423,11 +3844,143 @@ Panel {
   }
 
   onSettingsSectionChanged: {
+    if (settingsSection === "shortcuts" && !shortcutsEnabled)
+      settingsSection = "experimental"
+    if (settingsSection === "customisation" && !customAppearanceEnabled)
+      settingsSection = "experimental"
     if (settingsSection !== "maintenance" && connectionEditing && !setupBusy)
       root.cancelReconnect()
     if (settingsSection !== "maintenance") localServerExpanded = false
     if (settingsSection !== "setup" && remoteHistoryReconfiguring
         && !remoteHistoryBusy) root.cancelRemoteHistoryReconfigure()
+  }
+
+  GlobalShortcut {
+    id: openPanelGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "open_panel"
+    description: "Home Assistant AC: Open panel"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("open_panel")) root.openFromHotkey()
+  }
+
+  GlobalShortcut {
+    id: togglePowerGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "toggle_power"
+    description: "Home Assistant AC: Toggle power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.togglePower()
+  }
+
+  GlobalShortcut {
+    id: openSettingsGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "open_settings"
+    description: "Home Assistant AC: Open settings"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("open_settings")) root.openSettingsFromShortcut()
+  }
+
+  GlobalShortcut {
+    id: settingsPreviousGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "settings_previous"
+    description: "Home Assistant AC: Previous settings pane"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("settings_previous")) root.navigateSettingsFromShortcut(-1)
+  }
+
+  GlobalShortcut {
+    id: settingsNextGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "settings_next"
+    description: "Home Assistant AC: Next settings pane"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("settings_next")) root.navigateSettingsFromShortcut(1)
+  }
+
+  GlobalShortcut {
+    id: refreshGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "refresh"
+    description: "Home Assistant AC: Refresh status"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("refresh")) root.refresh()
+  }
+
+  GlobalShortcut {
+    id: powerOneGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_1"
+    description: "Home Assistant AC: AC 1 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(1)
+  }
+
+  GlobalShortcut {
+    id: powerTwoGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_2"
+    description: "Home Assistant AC: AC 2 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(2)
+  }
+
+  GlobalShortcut {
+    id: powerThreeGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_3"
+    description: "Home Assistant AC: AC 3 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(3)
+  }
+
+  GlobalShortcut {
+    id: powerFourGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_4"
+    description: "Home Assistant AC: AC 4 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(4)
+  }
+
+  GlobalShortcut {
+    id: powerFiveGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_5"
+    description: "Home Assistant AC: AC 5 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(5)
+  }
+
+  GlobalShortcut {
+    id: powerSixGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_6"
+    description: "Home Assistant AC: AC 6 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(6)
+  }
+
+  GlobalShortcut {
+    id: powerSevenGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_7"
+    description: "Home Assistant AC: AC 7 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(7)
+  }
+
+  GlobalShortcut {
+    id: powerEightGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_8"
+    description: "Home Assistant AC: AC 8 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(8)
+  }
+
+  GlobalShortcut {
+    id: powerNineGlobalShortcut
+    appid: root.globalShortcutAppId
+    name: "power_9"
+    description: "Home Assistant AC: AC 9 power"
+    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(9)
+  }
+
+  Shortcut {
+    id: settingsBackShortcut
+    enabled: root.setupOpen && root.configured && root.shortcutsEnabled
+      && root.shortcutEnabled("settings_back") && !root.shortcutCaptureActive
+    sequence: root.shortcutQmlSequence(root.shortcutValue("settings_back"))
+    onActivated: root.cancelSetup()
   }
 
   IpcHandler {
@@ -3490,8 +4043,15 @@ Panel {
         || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
         || reconnectEntityDropdown.popupOpen
         || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
-        || remoteHistoryUrlField.activeFocus)
-      onCloseRequested: root.setupOpen && root.configured ? root.cancelSetup() : root.close()
+        || remoteHistoryUrlField.activeFocus || root.shortcutCaptureActive)
+      onCloseRequested: {
+        if (root.setupOpen && root.configured) {
+          if (!root.shortcutsEnabled || root.shortcutEnabled("settings_back")) root.cancelSetup()
+          else root.close()
+        } else {
+          root.close()
+        }
+      }
       onActivateRequested: root.refresh()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
@@ -3602,7 +4162,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "SETTINGS SECTIONS"
+              text: "SETTINGS"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -3873,7 +4433,7 @@ Panel {
                 Toggle {
                   width: parent.width
                   label: "MasterSwitch"
-                  description: "Show guarded actions that control every available AC together."
+                  description: "One guarded power button turns every available AC on or off, independently of climate controls."
                   checked: root.masterSwitchEnabled
                   enabled: !root.setupBusy
                   foreground: root.foreground
@@ -3883,11 +4443,22 @@ Panel {
                 }
 
                 BorderSurface {
+                  visible: root.masterSwitchEnabled || height > 0.5
                   width: parent.width
                   implicitHeight: onboardingMasterSwitchWarning.implicitHeight + Style.space(18)
+                  height: root.masterSwitchEnabled ? implicitHeight : 0
+                  opacity: root.masterSwitchEnabled ? 1 : 0
+                  clip: true
                   color: root.alpha(root.urgent, 0.07)
                   borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
                   radius: root.compactRadius
+
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
 
                   Text {
                     id: onboardingMasterSwitchWarning
@@ -3896,13 +4467,14 @@ Panel {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: Style.space(10)
                     anchors.rightMargin: Style.space(10)
-                    text: "Warning: MasterSwitch can turn every available AC on or off at once. I'm not responsible for wrecking your electricity bills."
+                    text: "Warning: I'm not responsible for wrecking your electricity bill."
                     color: root.urgent
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     wrapMode: Text.WordWrap
                   }
                 }
+
               }
             }
 
@@ -4221,40 +4793,6 @@ Panel {
               onClicked: root.setShowClimateControlsEnabled(!root.showClimateControls)
             }
 
-            Toggle {
-              width: parent.width
-              label: "MasterSwitch"
-              description: "Show guarded controls for every available climate device, independently of climate controls."
-              checked: root.masterSwitchEnabled
-              enabled: !root.setupBusy && !root.preferenceBusy
-              foreground: root.foreground
-              accent: root.controlAccentColor
-              fontFamily: root.fontFamily
-              onClicked: root.setMasterSwitchEnabled(!root.masterSwitchEnabled)
-            }
-
-            BorderSurface {
-              width: parent.width
-              implicitHeight: masterSwitchWarning.implicitHeight + Style.space(18)
-              color: root.alpha(root.urgent, 0.07)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
-              radius: root.compactRadius
-
-              Text {
-                id: masterSwitchWarning
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: Style.space(10)
-                anchors.rightMargin: Style.space(10)
-                text: "Warning: MasterSwitch can turn every available AC on or off at once. I'm not responsible for wrecking your electricity bills."
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-            }
-
             BorderSurface {
               id: barTemperaturesSettingsCard
               width: parent.width
@@ -4362,7 +4900,7 @@ Panel {
 
                 Row {
                   id: temperatureUnitChoices
-                  readonly property int optionCount: root.experimentalKelvinEnabled ? 3 : 2
+                  readonly property int optionCount: 3
                   width: parent.width
                   spacing: Style.space(6)
 
@@ -4370,8 +4908,8 @@ Panel {
                     model: [
                       { value: "celsius", label: "CELSIUS" },
                       { value: "fahrenheit", label: "FAHRENHEIT" },
-                    ].concat(root.experimentalKelvinEnabled
-                      ? [{ value: "kelvin", label: "KELVIN" }] : [])
+                      { value: "kelvin", label: "KELVIN" },
+                    ]
 
                     Button {
                       required property var modelData
@@ -4412,6 +4950,28 @@ Panel {
                 anchors.top: parent.top
                 anchors.margins: Style.space(10)
                 spacing: Style.space(7)
+
+                Text {
+                  width: parent.width
+                  text: "AMBIENT TEMPERATURE CHART"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
+
+                Toggle {
+                  width: parent.width
+                  label: "Ambient temperature chart"
+                  description: "Show the recorded ambient temperature history in the main panel."
+                  checked: root.historyEnabled
+                  enabled: !root.setupBusy && !root.preferenceBusy
+                  foreground: root.foreground
+                  accent: root.controlAccentColor
+                  fontFamily: root.fontFamily
+                  onClicked: root.setHistoryEnabled(!root.historyEnabled)
+                }
 
                 BorderSurface {
                   id: historySourceSettingsCard
@@ -4488,23 +5048,7 @@ Panel {
                       }
                     }
 
-                    Toggle {
-                      width: parent.width
-                      label: "Ambient temperature history"
-                      description: root.historySource === "server"
-                        ? "Show the server's ambient log in the main panel."
-                        : "Show the ambient log saved on this PC in the main panel."
-                      checked: root.historyEnabled
-                      enabled: !root.setupBusy && !root.preferenceBusy
-                      foreground: root.foreground
-                      accent: root.controlAccentColor
-                      fontFamily: root.fontFamily
-                      onClicked: root.setHistoryEnabled(!root.historyEnabled)
-                    }
-                  }
-                }
-
-            Column {
+                    Column {
               id: remoteHistorySection
               visible: root.historySource === "server" || height > 0.5
               width: parent.width
@@ -4574,7 +5118,7 @@ Panel {
 
                       Text {
                         width: parent.width
-                        text: "EXTERNAL SERVER HISTORY"
+                        text: "EXTERNAL SERVER"
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -4584,10 +5128,10 @@ Panel {
 
                       Row {
                         width: parent.width
-                        spacing: Style.space(4)
+                        spacing: Style.space(8)
 
                         Text {
-                          text: "PAIRED ·"
+                          text: "PAIRED"
                           color: root.dim
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
@@ -4598,7 +5142,7 @@ Panel {
                           id: externalHistoryConnectionStatus
                           connected: root.connected
                           pingMs: root.homeAssistantPingMs
-                          hideConnectedDot: true
+                          statusSpacing: Style.space(8)
                           foreground: root.foreground
                           urgentColor: root.urgent
                           fontFamily: root.fontFamily
@@ -4688,7 +5232,7 @@ Panel {
 
                       Text {
                         width: parent.width
-                        text: "EXTERNAL SERVER HISTORY"
+                        text: "EXTERNAL SERVER"
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -4964,13 +5508,21 @@ Panel {
               }
             }
 
-            Column {
-              visible: root.historyEnabled || height > 0.5
+                  }
+                }
+
+            BorderSurface {
+              id: historyRangeSettingsCard
+              readonly property bool historyVisible: root.historyEnabled
+              visible: historyVisible || height > 0.5
               width: parent.width
-              height: root.historyEnabled ? implicitHeight : 0
-              opacity: root.historyEnabled ? 1 : 0
+              implicitHeight: historyRangeSettingsForm.implicitHeight + Style.space(20)
+              height: historyVisible ? implicitHeight : 0
+              opacity: historyVisible ? 1 : 0
               clip: true
-              spacing: Style.space(7)
+              color: root.alpha(root.foreground, 0.012)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.06), 1)
+              radius: root.compactRadius
 
               Behavior on height {
                 NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
@@ -4979,20 +5531,28 @@ Panel {
                 NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
               }
 
-              Text {
-                width: parent.width
-                text: "CHART RANGE"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 0.8
-              }
+              Column {
+                id: historyRangeSettingsForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(7)
 
-              Row {
-                id: historyRangeChoices
-                width: parent.width
-                spacing: Style.space(5)
+                Text {
+                  width: parent.width
+                  text: "CHART RANGE"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
+
+                Row {
+                  id: historyRangeChoices
+                  width: parent.width
+                  spacing: Style.space(5)
 
                 Repeater {
                   model: root.historyRangeOptions
@@ -5071,19 +5631,33 @@ Panel {
                 }
               }
 
-              Text {
-                width: parent.width
-                text: root.experimentalHistoryEnabled
-                  ? "Extended history includes 7-day, 30-day, and custom ranges. For long recordings, an always-on external server logger is recommended."
-                  : "The chart keeps the selected range (" + root.formatHours(root.historyHours) + " hours). Local logging needs this PC active; sleep, shutdown, and restart periods remain empty. Extended and custom ranges are in Experimental."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
+                Text {
+                  readonly property bool showHistoryDescription: root.historySource === "local"
+                    || root.experimentalHistoryEnabled
+                  visible: showHistoryDescription || height > 0.5
+                  width: parent.width
+                  height: showHistoryDescription ? implicitHeight : 0
+                  opacity: showHistoryDescription ? 1 : 0
+                  clip: true
+                  text: root.experimentalHistoryEnabled
+                    ? "Extended history includes 7-day, 30-day, and custom ranges. For long recordings, an always-on external server logger is recommended."
+                    : "The chart keeps the selected range (" + root.formatHours(root.historyHours) + " hours). Local logging needs this PC active; sleep, shutdown, and restart periods remain empty. Extended and custom ranges are in Experimental."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+
+                  Behavior on height {
+                    NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+                  }
+                  Behavior on opacity {
+                    NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+                  }
+                }
               }
             }
           }
+        }
         }
         }
 
@@ -5137,6 +5711,51 @@ Panel {
                 anchors.leftMargin: Style.space(10)
                 anchors.rightMargin: Style.space(10)
                 text: "EXPERIMENTAL · Optional extras; some details may be less polished."
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "MasterSwitch"
+              description: "One guarded power button turns every available AC on or off, independently of climate controls."
+              checked: root.masterSwitchEnabled
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              onClicked: root.setMasterSwitchEnabled(!root.masterSwitchEnabled)
+            }
+
+            BorderSurface {
+              visible: root.masterSwitchEnabled || height > 0.5
+              width: parent.width
+              implicitHeight: masterSwitchWarning.implicitHeight + Style.space(18)
+              height: root.masterSwitchEnabled ? implicitHeight : 0
+              opacity: root.masterSwitchEnabled ? 1 : 0
+              clip: true
+              color: root.alpha(root.urgent, 0.07)
+              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+              radius: root.compactRadius
+
+              Behavior on height {
+                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+              }
+              Behavior on opacity {
+                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+              }
+
+              Text {
+                id: masterSwitchWarning
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                text: "Warning: I'm not responsible for wrecking your electricity bill."
                 color: root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -5327,31 +5946,20 @@ Panel {
                     }
                   }
                 }
+
+                Toggle {
+                  width: parent.width
+                  label: "Decimal average"
+                  description: "Show one decimal when averaging multiple AC temperatures."
+                  checked: root.averageTemperatureDecimals
+                  enabled: !root.preferenceBusy && root.selectedEntities.length > 1
+                  foreground: root.foreground
+                  accent: root.controlAccentColor
+                  fontFamily: root.fontFamily
+                  borderSpec: Border.none()
+                  onClicked: root.setAverageTemperatureDecimals(!root.averageTemperatureDecimals)
+                }
               }
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Decimal average"
-              description: "Show one decimal for averaged temperatures. Off keeps the average compact at a whole degree."
-              checked: root.averageTemperatureDecimals
-              enabled: !root.preferenceBusy
-              foreground: root.foreground
-              accent: root.controlAccentColor
-              fontFamily: root.fontFamily
-              onClicked: root.setAverageTemperatureDecimals(!root.averageTemperatureDecimals)
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Kelvin option"
-              description: "Add Kelvin to the temperature-unit choices as an experimental display option."
-              checked: root.experimentalKelvinEnabled
-              enabled: !root.preferenceBusy
-              foreground: root.foreground
-              accent: root.controlAccentColor
-              fontFamily: root.fontFamily
-              onClicked: root.setExperimentalKelvinEnabled(!root.experimentalKelvinEnabled)
             }
 
             Toggle {
@@ -5409,9 +6017,41 @@ Panel {
             }
 
             Toggle {
+              id: shortcutsToggle
+              width: parent.width
+              label: "Keyboard shortcuts"
+              description: "Enable global controls for the panel, AC power, settings navigation, and refresh. Edit them in Shortcuts."
+              checked: root.shortcutsEnabled
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              onClicked: root.setShortcutsEnabled(!root.shortcutsEnabled)
+            }
+
+            Button {
+              visible: root.shortcutsEnabled
+              width: parent.width
+              height: Style.space(34)
+              text: "OPEN SHORTCUTS"
+              iconText: "→"
+              iconSize: Style.font.body
+              fontSize: Style.font.caption
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              background: root.alpha(root.foreground, 0.025)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.preferenceBusy
+              tooltipText: "Open the keyboard shortcut editor"
+              onClicked: root.settingsSection = "shortcuts"
+            }
+
+            Toggle {
               width: parent.width
               label: "Extra customisations"
-              description: "Apply the visual options below. Turn it off to use the standard Omarchy finish."
+              description: "Enable a dedicated Customisation section for colours and surface finish."
               checked: root.customAppearanceEnabled
               enabled: !root.preferenceBusy
               foreground: root.foreground
@@ -5420,8 +6060,30 @@ Panel {
               onClicked: root.setCustomAppearanceEnabled(!root.customAppearanceEnabled)
             }
 
-            Column {
-              id: appearanceOptions
+            Button {
+              visible: root.customAppearanceEnabled
+              width: parent.width
+              height: Style.space(34)
+              text: "OPEN CUSTOMISATION"
+              iconText: "→"
+              iconSize: Style.font.body
+              fontSize: Style.font.caption
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              background: root.alpha(root.foreground, 0.025)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.preferenceBusy
+              tooltipText: "Open the customisation editor"
+              onClicked: root.settingsSection = "customisation"
+            }
+
+            Component {
+              id: appearanceOptionsComponent
+
+              Column {
+                id: appearanceOptions
               visible: root.customAppearanceEnabled || height > 0.5
               width: parent.width
               height: root.customAppearanceEnabled ? implicitHeight : 0
@@ -5724,6 +6386,393 @@ Panel {
                 enabled: !root.preferenceBusy
                 tooltipText: "Restore the default visual values without changing this switch"
                 onClicked: root.resetCustomisations()
+              }
+            }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: shortcutsCard
+          visible: root.configured && root.settingsSection === "shortcuts"
+            && root.shortcutsEnabled
+          width: parent.width
+          implicitHeight: shortcutsForm.implicitHeight + Style.space(40)
+          radius: root.panelRadius
+          color: root.alpha(root.accentColor, 0.035)
+          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+
+          Column {
+            id: shortcutsForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(20)
+            spacing: Style.space(11)
+
+            Text {
+              width: parent.width
+              text: "SHORTCUTS"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Click a key field, then press the combination you want. Each shortcut can be disabled separately."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Repeater {
+              model: root.shortcutDefinitions
+
+              delegate: BorderSurface {
+                required property var modelData
+                width: parent.width
+                implicitHeight: Math.max(54, shortcutRow.implicitHeight) + Style.space(14)
+                color: root.alpha(root.foreground, 0.018)
+                borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+                radius: root.compactRadius
+
+                Row {
+                  id: shortcutRow
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(9)
+                  anchors.rightMargin: Style.space(9)
+                  spacing: Style.space(7)
+
+                  Column {
+                    width: shortcutRow.width - shortcutCaptureField.width
+                      - shortcutToggle.implicitWidth - shortcutRow.spacing * 2
+                    spacing: Style.space(2)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      width: parent.width
+                      text: modelData.label
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      width: parent.width
+                      text: modelData.description
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                      width: parent.width
+                      text: modelData.scope + " · " + root.shortcutStatus(modelData.id)
+                      color: root.shortcutStatus(modelData.id) === "ACTIVE"
+                        ? root.accentColor : root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  FocusScope {
+                    id: shortcutCaptureField
+                    width: Style.space(150)
+                    height: Style.space(36)
+                    activeFocusOnTab: true
+                    Keys.priority: Keys.BeforeItem
+                    Keys.onPressed: function(event) {
+                      root.captureShortcut(modelData.id, event)
+                    }
+
+                    BorderSurface {
+                      anchors.fill: parent
+                      color: root.shortcutCaptureId === modelData.id
+                        ? root.alpha(root.accentColor, 0.12)
+                        : root.alpha(root.foreground, 0.025)
+                      borderSpec: Border.controlSpec(
+                        parent.activeFocus ? "focus" : "normal",
+                        root.foreground, root.controlAccentColor)
+                      radius: root.compactRadius
+                    }
+
+                    Text {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(7)
+                      anchors.rightMargin: Style.space(7)
+                      text: root.shortcutCaptureId === modelData.id
+                        ? "PRESS KEYS…" : root.shortcutDisplay(root.shortcutValue(modelData.id))
+                      color: root.shortcutCaptureId === modelData.id
+                        ? root.accentColor : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      fontSizeMode: Text.HorizontalFit
+                      minimumPixelSize: 8
+                      horizontalAlignment: Text.AlignHCenter
+                      verticalAlignment: Text.AlignVCenter
+                      wrapMode: Text.NoWrap
+                      elide: Text.ElideNone
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      enabled: !root.preferenceBusy
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        root.shortcutCaptureId = modelData.id
+                        shortcutCaptureField.forceActiveFocus()
+                      }
+                    }
+                  }
+
+                  ToggleSwitch {
+                    id: shortcutToggle
+                    width: implicitWidth
+                    checked: root.shortcutEnabled(modelData.id)
+                    enabled: !root.preferenceBusy && !root.shortcutCaptureActive
+                    interactive: true
+                    foreground: root.foreground
+                    accent: root.controlAccentColor
+                    anchors.verticalCenter: parent.verticalCenter
+                    onToggled: root.setShortcutEnabled(
+                      modelData.id, !root.shortcutEnabled(modelData.id))
+                  }
+                }
+              }
+            }
+
+            BorderSurface {
+              id: multiAcPowerShortcutsCard
+              readonly property bool individualPowerAvailable: root.multiUnitEnabled
+                && !root.globalSyncControls && root.selectedEntities.length > 1
+              visible: individualPowerAvailable || height > 0.5
+              width: parent.width
+              implicitHeight: multiAcPowerShortcutsForm.implicitHeight + Style.space(20)
+              height: individualPowerAvailable ? implicitHeight : 0
+              opacity: individualPowerAvailable ? 1 : 0
+              clip: true
+              color: root.alpha(root.accentColor, 0.045)
+              borderSpec: Border.flat(root.alpha(root.accentColor, 0.22), 1)
+              radius: root.compactRadius
+
+              Behavior on height {
+                NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
+              }
+              Behavior on opacity {
+                NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
+              }
+
+              Column {
+                id: multiAcPowerShortcutsForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(10)
+                spacing: Style.space(6)
+
+                Text {
+                  width: parent.width
+                  text: "INDIVIDUAL AC POWER"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
+
+                Text {
+                  width: parent.width
+                  text: "The power shortcut followed by 1–9 targets one selected AC. Available while Globally synced controls is off."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+
+                Repeater {
+                  model: Math.min(9, root.selectedEntities.length)
+
+                  delegate: BorderSurface {
+                    required property int index
+                    width: parent.width
+                    implicitHeight: Style.space(44)
+                    color: root.alpha(root.accentColor,
+                      root.shortcutEnabled("toggle_power") ? 0.055 : 0.018)
+                    borderSpec: Border.flat(root.alpha(
+                      root.shortcutEnabled("toggle_power") ? root.accentColor : root.foreground,
+                      root.shortcutEnabled("toggle_power") ? 0.20 : 0.10), 1)
+                    radius: root.compactRadius
+
+                    Row {
+                      id: multiShortcutRow
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(8)
+                      anchors.rightMargin: Style.space(8)
+                      spacing: Style.space(8)
+
+                      Text {
+                        id: multiShortcutNumber
+                        width: Style.space(24)
+                        height: parent.height
+                        text: String(index + 1)
+                        color: root.shortcutEnabled("toggle_power")
+                          ? root.accentColor : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                      }
+
+                      Column {
+                        width: parent.width - multiShortcutNumber.width
+                          - multiShortcutStatus.width - parent.spacing * 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(1)
+
+                        Text {
+                          width: parent.width
+                          text: root.entityDisplayName(root.selectedEntities[index])
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          elide: Text.ElideRight
+                        }
+
+                        Text {
+                          width: parent.width
+                          text: root.shortcutDisplay(root.shortcutValue("toggle_power"))
+                            + " + " + (index + 1)
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          fontSizeMode: Text.HorizontalFit
+                          minimumPixelSize: 8
+                          wrapMode: Text.NoWrap
+                          elide: Text.ElideNone
+                        }
+                      }
+
+                      Text {
+                        id: multiShortcutStatus
+                        width: Style.space(68)
+                        height: parent.height
+                        text: root.shortcutEnabled("toggle_power") ? "ACTIVE" : "DISABLED"
+                        color: root.shortcutEnabled("toggle_power")
+                          ? root.accentColor : root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.multiUnitEnabled && root.globalSyncControls
+                && root.selectedEntities.length > 1
+              width: parent.width
+              text: "Individual AC power shortcuts appear here when Globally synced controls is off."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              width: parent.width
+              height: Style.space(34)
+              text: root.preferenceKind === "reset_shortcuts"
+                ? "RESETTING…" : "RESET SHORTCUTS"
+              fontSize: Style.font.caption
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              background: root.alpha(root.foreground, 0.025)
+              bordered: true
+              radius: root.compactRadius
+              enabled: !root.preferenceBusy
+              tooltipText: "Restore the default keys and per-shortcut switches"
+              onClicked: root.resetShortcuts()
+            }
+          }
+        }
+
+        BorderSurface {
+          id: customisationCard
+          visible: root.configured && root.settingsSection === "customisation"
+            && root.customAppearanceEnabled
+          width: parent.width
+          implicitHeight: customisationForm.implicitHeight + Style.space(40)
+          radius: root.panelRadius
+          color: root.alpha(root.accentColor, 0.035)
+          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+
+          Column {
+            id: customisationForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(20)
+            spacing: Style.space(11)
+
+            Text {
+              width: parent.width
+              text: "CUSTOMISATION"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "Tune colours, per-device accents, and the panel's surface finish."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            BorderSurface {
+              id: customisationOptionsSurface
+              width: parent.width
+              implicitHeight: customisationOptionsForm.implicitHeight + Style.space(24)
+              color: root.alpha(root.foreground, 0.018)
+              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              radius: root.compactRadius
+
+              Column {
+                id: customisationOptionsForm
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(12)
+                spacing: Style.space(8)
+
+                Loader {
+                  id: customisationOptionsLoader
+                  width: parent.width
+                  active: root.customAppearanceEnabled
+                  sourceComponent: appearanceOptionsComponent
+                  height: item ? item.implicitHeight : 0
+                  onLoaded: if (item) item.width = width
+                }
               }
             }
           }

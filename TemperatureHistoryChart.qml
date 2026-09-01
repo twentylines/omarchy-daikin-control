@@ -22,7 +22,7 @@ Item {
   property bool connected: false
   property color liveColor: "#79B889"
 
-  implicitHeight: Style.space(248)
+  implicitHeight: Style.space(272)
   height: implicitHeight
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
@@ -128,6 +128,50 @@ Item {
     return values.length > 0 ? root.formatTemperature(values[values.length - 1].temperature) : "NO DATA"
   }
 
+  function visiblePointsInRange() {
+    var values = root.numericPoints()
+    var now = Date.now() / 1000
+    var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
+    var start = now - rangeSeconds
+    var visible = []
+    for (var i = 0; i < values.length; i++) {
+      if (values[i].timestamp >= start && values[i].timestamp <= now + 300)
+        visible.push(values[i])
+    }
+    return visible
+  }
+
+  function historySummary() {
+    var visible = root.visiblePointsInRange()
+    if (visible.length === 0)
+      return { peak: Number.NaN, average: Number.NaN, low: Number.NaN }
+
+    var peak = -Infinity
+    var low = Infinity
+    var total = 0
+    for (var i = 0; i < visible.length; i++) {
+      var value = Number(visible[i].temperature)
+      peak = Math.max(peak, value)
+      low = Math.min(low, value)
+      total += value
+    }
+    return { peak: peak, average: total / visible.length, low: low }
+  }
+
+  function summaryValue(kind) {
+    var summary = root.summaryValues
+    var normalized = String(kind).toUpperCase()
+    if (normalized === "PEAK") return Number(summary.peak)
+    if (normalized === "AVERAGE") return Number(summary.average)
+    return Number(summary.low)
+  }
+
+  function summaryValueText(value) {
+    return isFinite(Number(value)) ? root.formatTemperature(value) : "—"
+  }
+
+  property var summaryValues: root.historySummary()
+
   BorderSurface {
     anchors.fill: parent
     radius: root.panelRadius
@@ -220,10 +264,92 @@ Item {
         }
       }
 
+      BorderSurface {
+        id: historySummary
+        width: parent.width
+        height: Style.space(44)
+        radius: root.panelRadius
+        color: root.alpha(root.foreground, 0.018)
+        borderSpec: Border.flat(root.alpha(root.foreground, 0.08), 1)
+
+        Row {
+          id: historySummaryContent
+          anchors.fill: parent
+          anchors.leftMargin: Style.space(10)
+          anchors.rightMargin: Style.space(10)
+
+          Repeater {
+          model: [
+            { key: "PEAK", label: "Peak" },
+            { key: "AVERAGE", label: "Average" },
+            { key: "LOW", label: "Low" },
+          ]
+
+          Item {
+            required property var modelData
+            property real summaryValue: root.summaryValue(modelData.key)
+            property color summaryColor: isFinite(summaryValue)
+              ? root.temperatureColor(summaryValue) : root.alpha(root.foreground, 0.55)
+
+            width: historySummaryContent.width / 3
+            height: historySummaryContent.height
+
+            Column {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(1)
+
+              Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Style.space(5)
+
+                Rectangle {
+                  width: Style.space(5)
+                  height: width
+                  radius: width / 2
+                  anchors.verticalCenter: parent.verticalCenter
+                  color: summaryColor
+                }
+
+                Text {
+                  text: modelData.label
+                  color: root.alpha(root.foreground, 0.72)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.summaryValueText(summaryValue)
+                color: summaryColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+              }
+            }
+
+            Rectangle {
+              visible: modelData.key !== "LOW"
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              width: 1
+              height: Style.space(24)
+              color: root.alpha(root.foreground, 0.08)
+            }
+          }
+        }
+      }
+      }
+
       Item {
         id: chartFrame
         width: parent.width
-        height: Math.max(Style.space(132), parent.height - parent.spacing - historyHeader.height)
+        height: Math.max(Style.space(132), parent.height - parent.spacing * 2
+          - historyHeader.height - historySummary.height)
 
         BorderSurface {
           anchors.fill: parent
@@ -248,16 +374,10 @@ Item {
             var context = getContext("2d")
             context.reset()
 
-            var values = root.numericPoints()
             var now = Date.now() / 1000
             var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
             var start = now - rangeSeconds
-            var visible = []
-
-            for (var i = 0; i < values.length; i++) {
-              if (values[i].timestamp >= start && values[i].timestamp <= now + 300)
-                visible.push(values[i])
-            }
+            var visible = root.visiblePointsInRange()
 
             var minValue = Infinity
             var maxValue = -Infinity
