@@ -12,13 +12,12 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 
 <table>
 <tr>
-<td align="center" valign="top"><img src="docs/screenshots/single-ac-external.png" alt="Single-AC home screen with external server history" width="420"><br><sub>Single AC · external server history</sub></td>
-<td align="center" valign="top"><img src="docs/screenshots/multi-ac-external.png" alt="Multi-AC home screen with external server history" width="420"><br><sub>Multiple ACs · external server history</sub></td>
+<td align="center" valign="top"><img src="docs/screenshots/single-ac-external.png" alt="Single-AC home screen" width="420"><br><sub>Single AC</sub></td>
+<td align="center" valign="top"><img src="docs/screenshots/multi-ac-external.png" alt="Multi-AC home screen" width="420"><br><sub>Multiple ACs</sub></td>
 </tr>
 </table>
 
-Both gallery screenshots use **EXTERNAL SERVER** history, so the chart shows a
-fuller 24-hour recording rather than the local PC log.
+Both gallery screenshots show a complete 24-hour ambient-temperature recording.
 
 ## Requirements
 
