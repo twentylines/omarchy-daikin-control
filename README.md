@@ -1,8 +1,9 @@
-# Omarchy Daikin Control
+# Daikin AC Controls for Omarchy
 
-Control Home Assistant climate devices from the Omarchy bar. The widget shows
-ambient and target temperature, power state, and an optional temperature
-history chart without opening a Home Assistant dashboard.
+Control a Daikin climate device through Home Assistant from the Omarchy bar.
+See ambient and target temperature plus power state at a glance, then adjust
+temperature, mode, fan speed, and power without opening the Home Assistant
+dashboard.
 
 It uses Home Assistant's local REST API. It does not connect directly to the
 Daikin cloud or replace Home Assistant's Daikin integration.
@@ -19,28 +20,31 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 ## Requirements
 
 - Omarchy 4 or newer.
-- Home Assistant reachable from this PC.
-- A Daikin AC exposed as an available `climate.*` entity by Home Assistant's
-  Daikin integration.
-- A Home Assistant long-lived access token that can read and control that
-  entity.
-- `python3`.
+- A Home Assistant server with the Daikin integration configured.
 
-Compatibility depends mainly on the Wi-Fi controller and its firmware, not
-only the indoor-unit model. Home Assistant's documented examples include
-European BRP069A controllers, confirmed BRP069B41/B45 units, Australian
-BRP072A42/BRP072C and Zena devices, US BRP072A43, BRP084Cxx on firmware 2.8+,
-AirBase BRP15B61, and SKYFi. The Australian BRP072A42 path uses the Daikin
-Mobile Controller. Newer cloud-only controllers may not expose the local API.
-Check the maintained [Home Assistant Daikin compatibility list](https://www.home-assistant.io/integrations/daikin/)
+## Daikin compatibility
+
+This plugin controls the `climate.*` entity created by Home Assistant. The
+Wi-Fi controller and its firmware matter more than the indoor-unit model alone.
+Home Assistant currently lists these supported controller families:
+
+- **Europe:** `BRP069A41`, `BRP069A42`, `BRP069A43`, `BRP069A45`, plus confirmed
+  `BRP069B41` and `BRP069B45` controllers using ONECTA.
+- **Australia:** `BRP072A42` and `BRP072Cxx`, including Zena devices, using the
+  Daikin Mobile Controller.
+- **United States:** `BRP072A43` using Daikin Comfort Control.
+- **BRP084Cxx:** firmware `2.8.0` or newer.
+- **AirBase:** `BRP15B61`.
+- **SKYFi:** SKYFi-based units.
+
+Confirmed indoor-unit examples include Cora `FTXM25QVMA`, wall units
+`FTXS09LVJU`, `FTXS15LVJU`, and `FTXS18LVJU`, and floor unit `FVXS15NVJU`.
+These are examples rather than an exhaustive model list: support still depends
+on the controller, firmware, and features exposed by Home Assistant. Some
+models do not expose every control, such as fan speed or swing.
+
+Check Home Assistant's [Daikin supported hardware list](https://www.home-assistant.io/integrations/daikin/)
 before buying or troubleshooting hardware.
-
-Optional features have extra requirements:
-
-- **External history:** SSH key access to the same Linux host that runs Home
-  Assistant, plus Python 3 and systemd user timers on that host.
-- **Local Home Assistant:** Docker and internet access; the setup may ask for
-  administrator approval to install or start Docker.
 
 ## Install
 
@@ -68,16 +72,12 @@ arguments or displayed in the bar.
 
 - Shows the selected AC's ambient temperature, target, and power state in the
   bar.
-- Opens controls for target temperature, supported climate modes, and fan
-  speeds.
-- Updates power controls optimistically while Home Assistant catches up; a
-  pending request waits for the desired state and times out cleanly.
-- Provides a separately enabled, confirmed **MasterSwitch** for all
-  available Home Assistant climate devices.
-- Records ambient temperature history locally, or on the external Home
-  Assistant host.
-- Offers experimental multi-AC controls, longer chart ranges, and appearance
-  customisation.
+- Opens controls for target temperature, supported climate modes, fan speeds,
+  and power.
+- Updates controls immediately while waiting for Home Assistant to confirm the
+  requested state.
+- Records ambient temperature history locally, with optional external-server
+  logging for longer-running history.
 
 ## Settings
 
@@ -119,7 +119,7 @@ Local history is recorded while this PC is available. The chart keeps up to
 - With multiple ACs and **Globally synced controls** off, the power shortcut
   followed by **1–9** targets an individual selected AC.
 
-Experimental options are optional extras; some details may be less polished.
+These options are optional and separate from the default single-AC workflow.
 
 ### Maintenance
 

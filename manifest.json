@@ -5,7 +5,7 @@
   "version": "2.6.0",
   "author": "Sai",
   "license": "MIT",
-  "description": "Control Home Assistant climate devices from Omarchy, with optional local or external-server history logging, experimental multi-aircon controls, and temperature history.",
+  "description": "Control a Home Assistant Daikin climate entity from Omarchy, with temperature, mode, fan, power, and history controls.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Daikin AC Controls",
-    "description": "Control a Home Assistant Daikin climate entity from the Omarchy bar, with experimental multi-aircon support.",
+    "description": "Control a Home Assistant Daikin climate entity from the Omarchy bar.",
     "category": "Home",
     "aliases": [
       "daikin",

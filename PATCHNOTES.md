@@ -1,5 +1,16 @@
 # Patch Notes
 
+## 2.6.0
+
+- Added optional multi-AC controls with selected entities, synced or separate
+  remotes, and compact bar temperature choices.
+- Added per-device colour controls, automatic accent colours, keyboard
+  shortcuts, and a dedicated Customisation section.
+- Refined power feedback, temperature history presentation, settings
+  navigation, and the external-history documentation.
+- Added a compact README gallery with complete single-AC and multi-AC home
+  screen examples.
+
 ## 2.5.1
 
 - Renamed the settings section to **MAINTENANCE** and removed the privacy
@@ -18,8 +29,6 @@
   container. Docker, its image, and unrelated containers remain untouched.
 - Added reviewable local and external cleanup scripts and made custom external
   history paths persist correctly in the server logger.
-- Renamed the project/data area to **MAINTENANCE**, removed the privacy banner,
-  and moved the external-server manual checklist to a dedicated GitHub page.
 
 ## 2.4.0
 
@@ -33,10 +42,6 @@
   SOURCE** action, and a **HOME ASSISTANT SETTINGS** quick link.
   The installer is user-owned and does not use sudo, install packages, open
   ports, send telemetry, or call Home Assistant control endpoints.
-- Added a three-scope uninstall flow with animated, separately confirmed
-  choices for **REMOVE EVERYTHING**, **REMOVE APP + LOGGER**, and **REMOVE
-  PLUGIN ONLY**. Full cleanup only removes the plugin-managed local Home
-  Assistant container/data and refuses an unmanaged same-named container.
 - Reworked Settings into a compact universal-width panel with universal back
   navigation and focused `SETUP`, `PREFERENCES`, and `MAINTENANCE` tabs.
 
@@ -69,7 +74,3 @@
 - Added a visible `RESTARTING AC…` state while the AC returns to its selected
   mode.
 - Improved temperature history chart spacing, padding, and label placement.
-
-The household shutdown control is available only when climate controls and
-MasterSwitch are enabled. It targets climate entities that Home Assistant
-reports as available, including entities in rooms other than the selected AC.
