@@ -20,6 +20,7 @@ Item {
   property string sourceLabel: "LOCAL · LOGGED WHILE PC IS ON"
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
   property bool connected: false
+  property bool showLiveIndicator: false
   property color liveColor: "#79B889"
 
   implicitHeight: Style.space(272)
@@ -220,11 +221,12 @@ Item {
           width: implicitWidth
           height: implicitHeight
           anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.space(5)
+          spacing: root.showLiveIndicator ? Style.space(5) : 0
 
           Item {
-            width: Style.space(8)
+            width: root.showLiveIndicator ? Style.space(8) : 0
             height: width
+            visible: root.showLiveIndicator
             anchors.verticalCenter: parent.verticalCenter
 
             Rectangle {
@@ -237,14 +239,14 @@ Item {
               opacity: root.connected ? 1 : 0.35
 
               SequentialAnimation on opacity {
-                running: root.connected
+                running: root.showLiveIndicator && root.connected
                 loops: Animation.Infinite
                 NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutQuad }
                 NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutQuad }
               }
 
               SequentialAnimation on scale {
-                running: root.connected
+                running: root.showLiveIndicator && root.connected
                 loops: Animation.Infinite
                 NumberAnimation { to: 1.3; duration: 700; easing.type: Easing.InOutQuad }
                 NumberAnimation { to: 1; duration: 700; easing.type: Easing.InOutQuad }

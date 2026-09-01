@@ -8979,6 +8979,7 @@ Panel {
           rangeHours: root.historyHours
           unit: root.displayTemperatureUnit
           connected: root.connected
+          showLiveIndicator: root.historySource === "server"
           sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground

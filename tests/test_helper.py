@@ -853,6 +853,10 @@ class HelperTests(unittest.TestCase):
         self.assertIn('{ key: "AVERAGE", label: "Average" }', chart)
         self.assertIn('{ key: "LOW", label: "Low" }', chart)
         self.assertIn('text: root.summaryValueText(summaryValue)', chart)
+        self.assertIn("property bool showLiveIndicator: false", chart)
+        self.assertIn("width: root.showLiveIndicator ? Style.space(8) : 0", chart)
+        self.assertIn("spacing: root.showLiveIndicator ? Style.space(5) : 0", chart)
+        self.assertIn("showLiveIndicator: root.historySource === \"server\"", panel)
 
     def test_remote_history_path_is_written_to_the_logger_config(self):
         with tempfile.TemporaryDirectory() as directory:

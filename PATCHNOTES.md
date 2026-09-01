@@ -10,6 +10,8 @@
   navigation, and the external-history documentation.
 - Added a compact README gallery with complete single-AC and multi-AC home
   screen examples.
+- Gallery examples use the fuller external-server history; local history no
+  longer shows a live indicator beside the chart range.
 
 ## 2.5.1
 

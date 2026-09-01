@@ -17,6 +17,8 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 </tr>
 </table>
 
+The gallery uses external-server history so the chart shows a fuller recording.
+
 ## Requirements
 
 - Omarchy 4 or newer.
