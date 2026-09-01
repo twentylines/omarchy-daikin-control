@@ -9,18 +9,10 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 
 ## Screenshots
 
-Click any tile for the full-size app-only view.
-
 <table>
 <tr>
-<td align="center"><a href="docs/screenshots/main-controls.png"><img src="docs/screenshots/main-controls.png" alt="Main AC controls" width="210"></a><br><sub>Main controls</sub></td>
-<td align="center"><a href="docs/screenshots/preferences.png"><img src="docs/screenshots/preferences.png" alt="Preferences settings" width="210"></a><br><sub>Preferences</sub></td>
-<td align="center"><a href="docs/screenshots/shortcuts.png"><img src="docs/screenshots/shortcuts.png" alt="Keyboard shortcuts settings" width="210"></a><br><sub>Shortcuts: ← → ↑ ↓</sub></td>
-</tr>
-<tr>
-<td align="center"><a href="docs/screenshots/customisation.png"><img src="docs/screenshots/customisation.png" alt="Customisation settings" width="210"></a><br><sub>Customisation</sub></td>
-<td align="center"><a href="docs/screenshots/experimental.png"><img src="docs/screenshots/experimental.png" alt="Experimental settings" width="210"></a><br><sub>Experimental</sub></td>
-<td align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="Maintenance settings" width="210"></a><br><sub>Maintenance</sub></td>
+<td align="center" valign="top"><img src="docs/screenshots/single-ac.png" alt="Home screen with one AC selected" width="420"></td>
+<td align="center" valign="top"><img src="docs/screenshots/multi-ac.png" alt="Home screen with multi-AC controls enabled" width="420"></td>
 </tr>
 </table>
 
