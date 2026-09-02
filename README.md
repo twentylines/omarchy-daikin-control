@@ -1,4 +1,4 @@
-T# Daikin AC Controls for Omarchy
+# Daikin AC Controls for Omarchy
 
 Control a Daikin climate device through Home Assistant from the Omarchy bar.
 See ambient and target temperature plus power state at a glance, then adjust
@@ -12,8 +12,8 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 
 <table>
 <tr>
-<td align="center" valign="top"><img src="docs/screenshots/single-ac-external.png" alt="Single-AC home screen" width="420"><br><sub></sub></td>
-<td align="center" valign="top"><img src="docs/screenshots/multi-ac-external.png" alt="Multi-AC home screen" width="420"><br><sub></sub></td>
+<td align="center" valign="top"><img src="docs/screenshots/single-ac-external.png" alt="Single-AC home screen" width="420"><br><sub>Single AC</sub></td>
+<td align="center" valign="top"><img src="docs/screenshots/multi-ac-external.png" alt="Multi-AC home screen" width="420"><br><sub>Multiple ACs</sub></td>
 </tr>
 </table>
 
