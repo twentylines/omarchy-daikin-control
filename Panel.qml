@@ -17,7 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginVersion: "0.3.5"
+  readonly property string pluginVersion: "0.3.5a"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"

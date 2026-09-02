@@ -1,5 +1,11 @@
 # Patch Notes
 
+## 0.3.5a
+
+- Improved chart-range and external-history refresh performance.
+- Fixed the chart-range UI copy so the selected window is clear at a glance,
+  for example, `READINGS FROM THE LAST 24 HOURS`.
+
 ## 0.3.5
 
 - Moved the live latency dot beside the SSH read value and replaced the old

@@ -1337,11 +1337,11 @@ class HelperTests(unittest.TestCase):
         self.assertIn("onConfirmingChanged", critical)
         self.assertIn("confirmationFocusTimer", critical)
 
-    def test_plugin_version_is_0_3_5_and_settings_title_is_not_repeated(self):
+    def test_plugin_version_is_0_3_5a_and_settings_title_is_not_repeated(self):
         manifest = json.loads((HELPER.parent / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.5")
+        self.assertEqual(manifest["version"], "0.3.5a")
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
-        self.assertIn('readonly property string pluginVersion: "0.3.5"', panel)
+        self.assertIn('readonly property string pluginVersion: "0.3.5a"', panel)
         self.assertIn('text: "VERSION " + root.pluginVersion', panel)
         self.assertNotIn('text: "SETTINGS"\n              color: root.dim', panel)
 
