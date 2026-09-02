@@ -17,7 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginVersion: "0.3.3"
+  readonly property string pluginVersion: "0.3.4"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"
@@ -35,6 +35,7 @@ Panel {
   readonly property string localServerScriptPath: root.pluginDir + "/setup-homeassistant.sh"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color warning: "#D0A66A"
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   property var unitReadings: []
@@ -55,7 +56,6 @@ Panel {
   property var barTemperatureEntitiesPrevious: []
   property bool experimentalHistoryEnabled: false
   property bool experimentalHistoryEnabledPrevious: false
-  readonly property string globalShortcutAppId: "sai.homeassistant-ac"
   readonly property var shortcutDefaults: ({
     open_panel: { key: "SUPER+ALT+A", enabled: true },
     toggle_power: { key: "SUPER+ALT+P", enabled: true },
@@ -83,6 +83,7 @@ Panel {
   property bool globalTabNavigationEnabled: false
   property bool globalTabNavigationEnabledPrevious: false
   property var globalTabFocusOverrides: []
+  property string globalTabFocusOverrideMode: ""
   property bool configFileModeEnabled: false
   property bool configFileModeEnabledPrevious: false
   property string configFileText: ""
@@ -319,7 +320,10 @@ Panel {
 
   function latencyColor(value, healthyColor) {
     var latency = Number(value)
-    return isFinite(latency) && latency > 500 ? root.urgent : healthyColor
+    if (!isFinite(latency) || latency < 0) return healthyColor
+    if (latency > 500) return root.urgent
+    if (latency >= 150) return root.warning
+    return healthyColor
   }
 
   function surfaceColor(value) {
@@ -516,35 +520,75 @@ Panel {
         && (event.modifiers & Qt.ShiftModifier) !== 0)
   }
 
+  function restoreGlobalTabOverrides() {
+    var overrides = root.globalTabFocusOverrides || []
+    for (var i = 0; i < overrides.length; i++) {
+      var item = overrides[i].item
+      if (!item) continue
+      if (overrides[i].property === "focusable")
+        item.focusable = overrides[i].value
+      else if (overrides[i].property === "activeFocusOnTab")
+        item.activeFocusOnTab = overrides[i].value
+    }
+    root.globalTabFocusOverrides = []
+    root.globalTabFocusOverrideMode = ""
+  }
+
+  function rememberGlobalTabOverride(overrides, item, property, value) {
+    for (var i = 0; i < overrides.length; i++) {
+      if (overrides[i].item === item && overrides[i].property === property) return
+    }
+    overrides.push({ item: item, property: property, value: value })
+  }
+
   // The shell's default Tab action moves between panel popouts. When this
   // experimental option is enabled, make the panel's ordinary buttons join
   // the same focus chain as text fields, toggles, and dropdown triggers.
-  // Turning it off restores every temporary focus flag and releases Tab back
-  // to the shell immediately.
+  // Turning it off also disables Qt's normal tab-focus flags, so a stale
+  // focus chain cannot keep navigating inside this panel after the switch is
+  // turned off.
   function applyGlobalTabNavigation() {
     var overrides = root.globalTabFocusOverrides || []
-    if (!root.globalTabNavigationEnabled) {
-      for (var i = 0; i < overrides.length; i++) {
-        if (overrides[i].item) overrides[i].item.focusable = overrides[i].value
-      }
-      root.globalTabFocusOverrides = []
+    var mode = String(root.globalTabFocusOverrideMode || "")
+
+    if (root.configFileModeEnabled) {
+      if (mode !== "") root.restoreGlobalTabOverrides()
       return
+    }
+
+    if (!root.globalTabNavigationEnabled) {
+      if (mode === "enabled") {
+        root.restoreGlobalTabOverrides()
+        overrides = []
+      }
+
+      function disableTabFocus(item) {
+        if (!item) return
+        if (item !== keyCatcher && item.activeFocusOnTab === true) {
+          root.rememberGlobalTabOverride(
+            overrides, item, "activeFocusOnTab", item.activeFocusOnTab)
+          item.activeFocusOnTab = false
+        }
+        var children = item.children || []
+        for (var i = 0; i < children.length; i++) disableTabFocus(children[i])
+      }
+
+      disableTabFocus(keyCatcher)
+      root.globalTabFocusOverrides = overrides
+      root.globalTabFocusOverrideMode = "disabled"
+      return
+    }
+
+    if (mode === "disabled") {
+      root.restoreGlobalTabOverrides()
+      overrides = []
     }
 
     function visit(item) {
       if (!item) return
       if (item !== keyCatcher && item.focusable === false) {
-        var alreadySaved = false
-        for (var i = 0; i < overrides.length; i++) {
-          if (overrides[i].item === item) {
-            alreadySaved = true
-            break
-          }
-        }
-        if (!alreadySaved) {
-          overrides.push({ item: item, value: item.focusable })
-          item.focusable = true
-        }
+        root.rememberGlobalTabOverride(overrides, item, "focusable", item.focusable)
+        item.focusable = true
       }
       var children = item.children || []
       for (var j = 0; j < children.length; j++) visit(children[j])
@@ -552,6 +596,7 @@ Panel {
 
     visit(keyCatcher)
     root.globalTabFocusOverrides = overrides
+    root.globalTabFocusOverrideMode = "enabled"
   }
 
   function globalTabFocusItems() {
@@ -4794,7 +4839,12 @@ Panel {
   onSetupUrlChanged: {
     if (!root.setupAddressSyncing) root.syncSetupAddressFields(root.setupUrl)
   }
-  onGlobalTabNavigationEnabledChanged: Qt.callLater(root.applyGlobalTabNavigation)
+  onGlobalTabNavigationEnabledChanged: Qt.callLater(function() {
+    root.applyGlobalTabNavigation()
+    if (!root.globalTabNavigationEnabled && !root.configFileModeEnabled
+        && root.opened && keyCatcher)
+      keyCatcher.forceActiveFocus()
+  })
   onHistoryHoursChanged: historyWindowRevision += 1
   onHistoryChartVisibleChanged: if (historyChartVisible) historyWindowRevision += 1
   onUnitReadingsChanged: Qt.callLater(root.applyGlobalTabNavigation)
@@ -4860,126 +4910,6 @@ Panel {
     Qt.callLater(root.applyGlobalTabNavigation)
   }
 
-  GlobalShortcut {
-    id: openPanelGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "open_panel"
-    description: "Home Assistant AC: Open panel"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("open_panel")) root.openFromHotkey()
-  }
-
-  GlobalShortcut {
-    id: togglePowerGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "toggle_power"
-    description: "Home Assistant AC: Toggle power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.togglePower()
-  }
-
-  GlobalShortcut {
-    id: openSettingsGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "open_settings"
-    description: "Home Assistant AC: Open settings"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("open_settings")) root.openSettingsFromShortcut()
-  }
-
-  GlobalShortcut {
-    id: settingsPreviousGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "settings_previous"
-    description: "Home Assistant AC: Previous settings pane"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("settings_previous")) root.navigateSettingsFromShortcut(-1)
-  }
-
-  GlobalShortcut {
-    id: settingsNextGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "settings_next"
-    description: "Home Assistant AC: Next settings pane"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("settings_next")) root.navigateSettingsFromShortcut(1)
-  }
-
-  GlobalShortcut {
-    id: refreshGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "refresh"
-    description: "Home Assistant AC: Refresh status"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("refresh")) root.refresh()
-  }
-
-  GlobalShortcut {
-    id: powerOneGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_1"
-    description: "Home Assistant AC: AC 1 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(1)
-  }
-
-  GlobalShortcut {
-    id: powerTwoGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_2"
-    description: "Home Assistant AC: AC 2 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(2)
-  }
-
-  GlobalShortcut {
-    id: powerThreeGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_3"
-    description: "Home Assistant AC: AC 3 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(3)
-  }
-
-  GlobalShortcut {
-    id: powerFourGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_4"
-    description: "Home Assistant AC: AC 4 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(4)
-  }
-
-  GlobalShortcut {
-    id: powerFiveGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_5"
-    description: "Home Assistant AC: AC 5 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(5)
-  }
-
-  GlobalShortcut {
-    id: powerSixGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_6"
-    description: "Home Assistant AC: AC 6 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(6)
-  }
-
-  GlobalShortcut {
-    id: powerSevenGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_7"
-    description: "Home Assistant AC: AC 7 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(7)
-  }
-
-  GlobalShortcut {
-    id: powerEightGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_8"
-    description: "Home Assistant AC: AC 8 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(8)
-  }
-
-  GlobalShortcut {
-    id: powerNineGlobalShortcut
-    appid: root.globalShortcutAppId
-    name: "power_9"
-    description: "Home Assistant AC: AC 9 power"
-    onPressed: if (root.shortcutsEnabled && root.shortcutEnabled("toggle_power")) root.toggleUnitPowerShortcut(9)
-  }
-
   Shortcut {
     id: settingsBackShortcut
     enabled: root.setupOpen && root.configured && root.shortcutsEnabled
@@ -5001,6 +4931,17 @@ Panel {
       root.refresh()
       Qt.callLater(root.openSetup)
     }
+    function settings_previous(): void { root.navigateSettingsFromShortcut(-1) }
+    function settings_next(): void { root.navigateSettingsFromShortcut(1) }
+    function power_1(): void { root.toggleUnitPowerShortcut(1) }
+    function power_2(): void { root.toggleUnitPowerShortcut(2) }
+    function power_3(): void { root.toggleUnitPowerShortcut(3) }
+    function power_4(): void { root.toggleUnitPowerShortcut(4) }
+    function power_5(): void { root.toggleUnitPowerShortcut(5) }
+    function power_6(): void { root.toggleUnitPowerShortcut(6) }
+    function power_7(): void { root.toggleUnitPowerShortcut(7) }
+    function power_8(): void { root.toggleUnitPowerShortcut(8) }
+    function power_9(): void { root.toggleUnitPowerShortcut(9) }
     function refresh(): string { root.refresh(); return "ok" }
   }
 
@@ -5031,14 +4972,20 @@ Panel {
       id: outerPanelSurface
       visible: root.customAppearanceEnabled
       anchors.fill: parent
-      anchors.leftMargin: -(panel.padding + Border.left(panel.borderSpec))
-      anchors.rightMargin: -(panel.padding + Border.right(panel.borderSpec))
-      anchors.topMargin: -(panel.padding + Border.top(panel.borderSpec))
-      anchors.bottomMargin: -(panel.padding + Border.bottom(panel.borderSpec))
+      // contentHolder already starts after the shell card's border. Pull the
+      // surface back only across the card padding; including the border width
+      // here paints over KeyboardPanel's real accent outline and breaks its
+      // rounded corners when customisation is enabled.
+      anchors.leftMargin: -panel.padding
+      anchors.rightMargin: -panel.padding
+      anchors.topMargin: -panel.padding
+      anchors.bottomMargin: -panel.padding
       z: -3
-      // KeyboardPanel's card keeps the shell corner geometry. Match it here
-      // so the custom fill does not leave a second, offset corner behind it.
-      radius: Style.cornerRadius
+      // Keep the inner fill inside the card border while matching the shell's
+      // corner geometry instead of drawing a second offset outline.
+      radius: Math.max(0, Style.cornerRadius - Math.max(
+        Border.left(panel.borderSpec), Border.top(panel.borderSpec),
+        Border.right(panel.borderSpec), Border.bottom(panel.borderSpec)))
       color: root.panelSurface
       // The actual outer border is supplied through KeyboardPanel.borderSpec;
       // painting another border on this inset overlay creates doubled lines
@@ -5068,10 +5015,11 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      // A disabled global-tab switch is a hard off: the catcher cannot see or
-      // consume Tab, and its temporary focus flags have already been restored.
-      blocked: (!root.globalTabNavigationEnabled && !root.configFileModeEnabled)
-        || (root.setupOpen && (setupHostField.activeFocus === true
+      activeFocusOnTab: false
+      // Text editors and clicked controls own their keys. The catcher remains
+      // available when global Tab is off so its Tab handler can hand control
+      // back to the shell instead of allowing Qt to walk a stale focus chain.
+      blocked: (root.setupOpen && (setupHostField.activeFocus === true
           || setupPortField.activeFocus === true
           || setupTokenField.activeFocus === true
           || reconnectHostField.activeFocus === true
@@ -5085,9 +5033,7 @@ Panel {
           || root.configFileModeEnabled === true
           || configFileEditor.activeFocus === true
           || root.shortcutCaptureActive === true))
-        || (root.globalTabNavigationEnabled === true
-          && !!panel.activeFocusItem
-          && panel.activeFocusItem !== keyCatcher)
+        || (!!panel.activeFocusItem && panel.activeFocusItem !== keyCatcher)
       onCloseRequested: {
         if (root.setupOpen && root.configured) {
           if (!root.shortcutsEnabled || root.shortcutEnabled("settings_back")) root.cancelSetup()
@@ -5098,10 +5044,8 @@ Panel {
       }
       onActivateRequested: root.refresh()
       onTabRequested: function(direction) {
-        // Tab is opt-in. With the switch off, this catcher is blocked and
-        // ordinary Qt/shell handling remains untouched. Config File Mode is
-        // the one deliberate exception with its own editor action order.
         if (root.globalTabNavigationEnabled) root.focusNextPanelItem(direction)
+        else if (!root.configFileModeEnabled) root.switchPanel(direction)
       }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
@@ -5125,17 +5069,19 @@ Panel {
 
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
-          // Text fields and other Qt controls can consume Tab before the
-          // panel key catcher sees it. Only intercept it when the explicit
-          // Experimental switch is on; disabled mode must release Tab
-          // completely. Config File Mode has its own action order.
-          if (!root.configFileModeEnabled && root.globalTabNavigationEnabled
+          // Text fields and other Qt controls can receive Tab before the panel
+          // key catcher. Handle it here in both modes: the explicit option
+          // walks this panel, while the hard-off path returns to the shell.
+          if (!root.configFileModeEnabled
               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
             event.accepted = true
+            var direction = (event.modifiers & Qt.ShiftModifier) !== 0
+              || event.key === Qt.Key_Backtab ? -1 : 1
             if (root.globalTabNavigationEnabled)
               root.focusNextPanelItem(
-                (event.modifiers & Qt.ShiftModifier) !== 0
-                  || event.key === Qt.Key_Backtab ? -1 : 1)
+                direction)
+            else
+              root.switchPanel(direction)
             return
           }
           if (event.key === Qt.Key_Escape) {
@@ -5397,7 +5343,11 @@ Panel {
               id: configFileEditorScroll
               width: parent.width
               height: Style.space(420)
-              contentWidth: width
+              // The attached scrollbar is drawn over the right edge of its
+              // viewport. Reserve a real gutter so the editor's rounded
+              // border remains continuous at the top-right corner.
+              readonly property real editorRightInset: Style.space(18)
+              contentWidth: configFileEditor.width
               contentHeight: Math.max(height,
                 configFileEditor.contentHeight + configFileEditor.topPadding
                   + configFileEditor.bottomPadding)
@@ -5414,7 +5364,8 @@ Panel {
 
               TextArea {
                 id: configFileEditor
-                width: configFileEditorScroll.width
+                width: Math.max(1, configFileEditorScroll.width
+                  - configFileEditorScroll.editorRightInset)
                 height: Math.max(configFileEditorScroll.height,
                   contentHeight + topPadding + bottomPadding)
                 text: root.configFileText
@@ -6642,7 +6593,9 @@ Panel {
                           pingMs: root.remoteHistoryPingMs
                           statusSpacing: Style.space(8)
                           foreground: root.foreground
+                          warningColor: root.warning
                           urgentColor: root.urgent
+                          metricLabel: "SSH READ"
                           fontFamily: root.fontFamily
                         }
                       }
@@ -7096,9 +7049,9 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: "CURRENT WINDOW · LAST " + root.formatHours(root.historyHours)
-                    + " UP TO NOW"
-                  color: root.historyLogStale ? root.urgent : root.accentColor
+                  text: "ROLLING WINDOW · PAST " + root.formatHours(root.historyHours)
+                    + " ENDING NOW"
+                  color: root.accentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
@@ -7202,8 +7155,8 @@ Panel {
                   opacity: showHistoryDescription ? 1 : 0
                   clip: true
                   text: root.experimentalHistoryEnabled
-                    ? "Shows readings from the selected period up to now. Extended history adds 7 days, 30 days, and custom ranges."
-                    : "Shows readings from the selected period up to now. Local logging pauses while this PC sleeps or is off. Extended ranges are in Experimental."
+                    ? "The chart shows the selected period ending now. Extended history adds 7-day, 30-day, and custom ranges."
+                    : "The chart shows the selected hours ending now. Local logging pauses while this PC sleeps or is off. Enable Extended chart history for longer ranges."
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -8534,6 +8487,7 @@ Panel {
                     connected: root.connected
                     pingMs: root.homeAssistantPingMs
                     foreground: root.foreground
+                    warningColor: root.warning
                     urgentColor: root.urgent
                     fontFamily: root.fontFamily
                   }
@@ -10788,12 +10742,12 @@ Panel {
           unit: root.displayTemperatureUnit
           connected: root.connected
           showLiveIndicator: root.historySource === "server"
-          sourceLabel: root.historySourceLabel + (root.historyLogStale ? " · STALE" : "")
+          sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
           accent: root.accentColor
           stale: root.historyLogStale
-          warningColor: root.urgent
+          warningColor: root.warning
           background: root.customAppearanceEnabled
             ? root.panelSurface : root.alpha(root.foreground, 0.035)
           borderColor: root.customAppearanceEnabled

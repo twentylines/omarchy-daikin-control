@@ -118,7 +118,8 @@ rolling window ending now: selecting X H shows the past X hours. It keeps up to
   adjustable panel background, transparency, blur, corner radius, and colour
   controls. The background follows Omarchy by default, or can be set to a
   fixed colour. **Compact UI** removes idle card chrome and tightens spacing
-  while preserving readable padding.
+  while preserving readable padding. **Outer panel border** can hide the
+  accent outline entirely when a borderless popup is preferred.
 - **Config file mode** is enabled from **Experimental**. Once enabled, it
   replaces the settings panes with a keyboard-first JSON editor under the
   **SETTINGS** title, where the mode can be disabled again. Press **Ctrl+S** or
@@ -170,9 +171,14 @@ separate field. Enter the Home Assistant URL as seen from that host, usually
 it verifies SSH and saves the pairing without copying files, sending the token,
 or reinstalling the timer. Choose **INSTALL / UPDATE TIMER** only for a
 first-time setup or when the remote logger configuration needs changing.
-If the chart says **EXTERNAL LOG STALE**, the remote timer is reachable but its
-Home Assistant token or logger setup needs updating; use **INSTALL / UPDATE
-TIMER** to refresh the server-side configuration.
+If the chart shows its **STALE** badge, the last logged window is being shown
+because the remote logger has not produced a fresh sample. If the logger is
+reachable but its Home Assistant token or setup is invalid, use **INSTALL /
+UPDATE TIMER** to refresh the server-side configuration.
+The external status readout is labelled **SSH READ** because it measures the
+time to open the history file over SSH, not ICMP latency. It is warning-coloured
+from 150 ms and red only above 500 ms; a normal LAN ping can still be fast when
+the remote logger itself is failing.
 
 The installer is intentionally narrow: no sudo, package installation, open
 ports, telemetry, or Home Assistant control calls. It creates only the named

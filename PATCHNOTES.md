@@ -1,5 +1,25 @@
 # Patch Notes
 
+## 0.3.4
+
+- Fixed the external chart header so `STALE` appears once, the selected-range
+  explanation stays accent-coloured, and stale data uses a warning colour.
+- Repaired keyboard shortcuts by routing Hyprland binds directly to the
+  running shell IPC target; opening the panel and settings now works without
+  the unreliable global-shortcut bridge.
+- Fixed stale external history diagnostics: the panel now labels the measured
+  value as SSH read time, uses 150 ms for a warning and over 500 ms for red,
+  and keeps the chart's last logged window visible while the remote logger is
+  unavailable.
+- Fixed customisation layering so the real popup outline remains visible and
+  follows the configured accent; the optional outer-border switch still hides
+  it completely when disabled.
+- Made Global Tab navigation a true opt-in: disabling it restores every focus
+  flag, prevents Qt from walking the panel's controls, and returns Tab to
+  normal panel switching until the switch is enabled again.
+- Reserved a scrollbar gutter in Config File Mode so the JSON editor's
+  top-right border is continuous.
+
 ## 0.3.3
 
 - Fixed stale external charts so the last available logged window remains

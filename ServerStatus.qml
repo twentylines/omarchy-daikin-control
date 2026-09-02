@@ -17,12 +17,15 @@ Item {
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property string offlineText: "OFFLINE"
+  property string metricLabel: ""
+  property real warningThresholdMs: 150
+  property real urgentThresholdMs: 500
 
   readonly property color statusColor: {
     var value = Number(root.pingMs)
     if (!root.connected || !isFinite(value) || value < 0) return root.foreground
-    if (value > 500) return root.urgentColor
-    if (value >= 100) return root.warningColor
+    if (value > root.urgentThresholdMs) return root.urgentColor
+    if (value >= root.warningThresholdMs) return root.warningColor
     return root.goodColor
   }
 
@@ -30,7 +33,8 @@ Item {
     var value = Number(root.pingMs)
     if (!root.connected) return root.offlineText
     if (!isFinite(value) || value < 0) return "WAITING"
-    return String(Math.max(0, Math.round(value))) + " MS"
+    var metric = root.metricLabel !== "" ? root.metricLabel + " · " : ""
+    return metric + String(Math.max(0, Math.round(value))) + " MS"
   }
 
   implicitWidth: statusRow.implicitWidth

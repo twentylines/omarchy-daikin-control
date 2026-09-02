@@ -257,10 +257,20 @@ def shortcut_hypr_sequence(value: str) -> str:
 def _shortcut_binding_line(
     key: str, action: str, description: str, hypr_sequence: str | None = None
 ) -> str:
-    target = f"{SHORTCUT_APP_ID}:{action}"
+    # Quickshell's GlobalShortcut objects use the Hyprland global-shortcuts
+    # protocol, while Hyprland's `global` dispatcher goes through the portal
+    # bridge.  On current Omarchy builds the bind can appear in both lists but
+    # the bridge does not deliver the press to the QML object.  Call the
+    # already-registered Quickshell IPC target directly instead.  Selecting by
+    # PID is intentional: the Omarchy shell is launched from a system path,
+    # so `qs ipc` cannot infer its config as the default instance.
+    ipc_command = (
+        f'qs ipc --pid "$(pgrep -xo quickshell)" call '
+        f"{SHORTCUT_APP_ID} {action}"
+    )
     return (
         f"  hl.bind({json.dumps(hypr_sequence or shortcut_hypr_sequence(key))}, "
-        f"hl.dsp.global({json.dumps(target)}), "
+        f"hl.dsp.exec_cmd({json.dumps(ipc_command)}), "
         f"{{ description = {json.dumps('Home Assistant AC: ' + description)} }})"
     )
 
