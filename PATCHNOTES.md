@@ -1,5 +1,14 @@
 # Patch Notes
 
+## 2.6.1
+
+- Rebuilt the external-server guide around one idempotent setup path with an
+  explicit Omarchy SSH-agent setup and copy/paste troubleshooting.
+- External SSH now recognizes the standard per-user agent sockets when the
+  GUI process does not inherit a terminal `SSH_AUTH_SOCK`.
+- Reconnect remains non-destructive and no longer depends on the local Home
+  Assistant token; SSH failures now explain the relevant agent or target fix.
+
 ## 2.6.0
 
 - Added optional multi-AC controls with selected entities, synced or separate
@@ -12,6 +21,9 @@
   screen examples.
 - Gallery examples use the fuller external-server history; local history no
   longer shows a live indicator beside the chart range.
+- Added a non-destructive external-server reconnect action, separate from
+  installing or updating the server timer, plus same-address reconnects that
+  can reuse the saved Home Assistant token.
 
 ## 2.5.1
 

@@ -793,11 +793,39 @@ def remote_history_identity_args() -> list[str]:
     return []
 
 
+def remote_history_agent_args() -> list[str]:
+    """Use the normal session agent, including Omarchy's standard socket.
+
+    Quickshell can be launched by Hyprland without inheriting a terminal's
+    SSH_AUTH_SOCK. Keep an explicitly supplied socket authoritative, then
+    recognize the standard per-user sockets so a passphrase-protected key
+    loaded into the desktop/systemd agent still works from the GUI.
+    """
+    if str(os.environ.get("SSH_AUTH_SOCK") or "").strip():
+        return []
+
+    runtime_dir = Path(
+        os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    )
+    for candidate in (
+        runtime_dir / "ssh-agent.socket",
+        runtime_dir / "gcr/ssh",
+        runtime_dir / "gnupg/S.gpg-agent.ssh",
+    ):
+        try:
+            if candidate.is_socket():
+                return ["-o", f"IdentityAgent={candidate}"]
+        except OSError:
+            continue
+    return []
+
+
 def remote_history_ssh_command(target: str, port: int) -> list[str]:
     return [
         "ssh",
         "-T",
         *remote_history_identity_args(),
+        *remote_history_agent_args(),
         "-o",
         "BatchMode=yes",
         "-o",
@@ -812,15 +840,98 @@ def remote_history_ssh_command(target: str, port: int) -> list[str]:
     ]
 
 
-def remote_history_command_error(result: subprocess.CompletedProcess[str]) -> str:
+def remote_history_command_error(
+    result: subprocess.CompletedProcess[str], operation: str = "read"
+) -> str:
     detail = (result.stderr or result.stdout or "").strip().splitlines()
     first_line = detail[0].strip() if detail else "SSH returned an error"
     lowered = first_line.lower()
+    if "could not open a connection to your authentication agent" in lowered:
+        return "The SSH agent is not available to Omarchy. Load the dedicated key in a desktop SSH agent, then try again."
+    if "sign_and_send_pubkey" in lowered or "agent refused" in lowered:
+        return "The Omarchy SSH agent rejected the dedicated key. Unlock or reload it in the desktop SSH agent, then try again."
+    if "load key" in lowered and ("passphrase" in lowered or "decrypt" in lowered):
+        return "The dedicated SSH key is locked. Unlock it in a desktop SSH agent visible to Omarchy, then try again."
     if "batchmode" in lowered or "password" in lowered or "publickey" in lowered:
         return "SSH key setup is incomplete. Open GUIDE and create the dedicated plugin key, then try again."
     if "could not resolve hostname" in lowered:
         return "The server address could not be resolved over SSH."
-    return "Cannot read server history over SSH: " + first_line[:180]
+    prefix = (
+        "Cannot connect to the external server over SSH"
+        if operation == "connect" else "Cannot read server history over SSH"
+    )
+    return prefix + ": " + first_line[:180]
+
+
+def connect_remote_history(config: dict[str, Any], payload: dict[str, Any]) -> int:
+    """Pair with an existing external logger without changing remote files."""
+    target = remote_history_target(payload.get("ssh_target"), required=True)
+    port = remote_history_port(payload.get("ssh_port", 22))
+    remote_url = normalize_url(
+        payload.get("home_assistant_url")
+        or config.get("history_remote_url")
+        or REMOTE_HISTORY_DEFAULT_URL
+    )
+    path = remote_history_path(payload.get("history_path") or config.get("history_remote_path"))
+
+    if path.startswith("~/"):
+        remote_path_expression = f'"$HOME/{path[2:]}"'
+    else:
+        remote_path_expression = shlex.quote(path)
+    probe_script = f"""set -eu
+if [ -r {remote_path_expression} ]; then
+  printf '%s\\n' history
+else
+  printf '%s\\n' server
+fi
+"""
+    command = remote_history_ssh_command(target, port) + ["bash", "-s"]
+    try:
+        result = subprocess.run(
+            command,
+            input=probe_script,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise HomeAssistantError("SSH is not installed on this PC, so the external server cannot be connected.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HomeAssistantError("Timed out while connecting to the external server over SSH.") from exc
+    except OSError as exc:
+        raise HomeAssistantError(f"Cannot connect to the external server over SSH: {exc}") from exc
+    if result.returncode != 0:
+        raise HomeAssistantError(remote_history_command_error(result, "connect"))
+
+    history_available = (result.stdout or "").strip() == "history"
+    config.update({
+        "history_source": "server",
+        "history_remote_target": target,
+        "history_remote_port": port,
+        "history_remote_url": remote_url,
+        "history_remote_path": path,
+    })
+    try:
+        save_config(config)
+    except OSError as exc:
+        raise HomeAssistantError(f"The server is reachable, but local settings could not be saved: {exc}") from exc
+
+    message = (
+        "Connected to the external server. Existing history was kept; the server timer was not changed."
+        if history_available
+        else "Connected to the external server. No history file was found yet; install the server timer to start recording."
+    )
+    return emit({
+        "ok": True,
+        "history_source": "server",
+        "history_remote_target": target,
+        "history_remote_port": port,
+        "history_remote_url": remote_url,
+        "history_remote_path": path,
+        "history_available": history_available,
+        "message": message,
+    })
 
 
 def load_remote_temperature_history(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -1251,6 +1362,13 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
     except HomeAssistantError as exc:
         return fail(str(exc), configured=False)
     token = str(payload.get("token") or "").strip()
+    if not token and payload.get("reuse_saved_token") is True:
+        try:
+            saved_url = normalize_url(current_config.get("url") or DEFAULT_URL)
+        except HomeAssistantError:
+            saved_url = ""
+        if saved_url == url:
+            token = str(current_config.get("token") or "").strip()
     if not token:
         return fail("Paste a Home Assistant long-lived access token to continue", configured=False, url=url)
 
@@ -1432,6 +1550,8 @@ def state_payload(state: dict[str, Any], entity_ids: list[str]) -> dict[str, Any
         "history_source": "local",
         "history_server": "",
         "history_error": "",
+        "history_available": False,
+        "history_ping_ms": -1,
         "last_changed": state.get("last_changed"),
         "last_updated": state.get("last_updated"),
     }
@@ -1462,21 +1582,30 @@ def status(
          if unit_payload["entity_id"] == active_entity),
         0,
     )
+    history_available = False
+    history_ping_ms = -1
     if config is not None and history_source(config.get("history_source")) == "server":
         target = remote_history_target(config.get("history_remote_target"))
         server_name = remote_history_display_name(target) if target else "NOT CONFIGURED"
+        history_started = time.monotonic()
         try:
             remote_history = load_remote_temperature_history(config)
+            history_ping_ms = round(max(0.0, (time.monotonic() - history_started) * 1000), 1)
+            history_available = True
             for unit_payload in units:
                 unit_payload["history_source"] = "server"
                 unit_payload["history_server"] = server_name
                 unit_payload["history"] = remote_history.get(unit_payload["entity_id"], [])
+                unit_payload["history_available"] = True
+                unit_payload["history_ping_ms"] = history_ping_ms
         except HomeAssistantError as exc:
             for unit_payload in units:
                 unit_payload["history_source"] = "server"
                 unit_payload["history_server"] = server_name
                 unit_payload["history"] = []
                 unit_payload["history_error"] = str(exc)
+                unit_payload["history_available"] = False
+                unit_payload["history_ping_ms"] = -1
     else:
         for unit_payload in units:
             unit_payload["history"] = record_temperature_history(
@@ -1496,6 +1625,8 @@ def status(
         (config or {}).get("sync_non_power_controls", True)
     )
     payload["ping_ms"] = ping_ms
+    payload["history_available"] = history_available
+    payload["history_ping_ms"] = history_ping_ms
     return emit(payload)
 
 
@@ -2019,6 +2150,18 @@ def main(argv: list[str]) -> int:
             return set_selection(config, read_setup_payload())
         except HomeAssistantError as exc:
             return fail(str(exc))
+
+    # Reconnecting to an already-installed external logger only needs the
+    # SSH target. It must not be gated on the local Home Assistant token: the
+    # connect action deliberately does not call Home Assistant or change the
+    # remote host. Installation remains below the token check because it has
+    # to write the token-bearing logger configuration remotely.
+    if action == "connect-remote-history" and len(argv) == 2:
+        try:
+            return connect_remote_history(config, read_setup_payload())
+        except HomeAssistantError as exc:
+            return fail(str(exc), configured=bool(token), url=url)
+
     if not token:
         return fail(
             f"Add a Home Assistant long-lived access token to {CONFIG_PATH}",
@@ -2065,7 +2208,7 @@ def main(argv: list[str]) -> int:
             "| set-selection | set-temperature <value> [entity_id] "
             "| set-mode <mode> [entity_id] | set-fan-mode <mode> [entity_id] "
             "| set-power <on|off> [entity_id] | turn-off-all | turn-on-all "
-            "| install-remote-history | remote-history-source "
+            "| connect-remote-history | install-remote-history | remote-history-source "
             "| set-preference <name> <value> | sync-shortcuts "
             "| reset-app"
         )

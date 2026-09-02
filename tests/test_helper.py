@@ -132,6 +132,159 @@ class HelperTests(unittest.TestCase):
                 helper.CONFIG_PATH = original_path
                 helper.urlopen = original_urlopen
 
+    def test_configure_can_reconnect_to_the_same_address_with_saved_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            original_urlopen = helper.urlopen
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            current_config = {
+                "url": "http://ha.local:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+            }
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps(current_config), encoding="utf-8")
+            requests = []
+
+            def fake_urlopen(request, timeout):
+                requests.append(request)
+                return FakeResponse(
+                    {"message": "API running."}
+                    if request.full_url.endswith("/api/")
+                    else [{
+                        "entity_id": "climate.office",
+                        "state": "cool",
+                        "attributes": {"friendly_name": "Office"},
+                    }]
+                )
+
+            helper.urlopen = fake_urlopen
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.configure(
+                        {
+                            "url": "ha.local:8123/api/",
+                            "reuse_saved_token": True,
+                        },
+                        current_config,
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(len(requests), 2)
+                self.assertTrue(all(
+                    request.headers.get("Authorization") == "Bearer test-secret"
+                    for request in requests
+                ))
+                self.assertNotIn("test-secret", output.getvalue())
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["token"], "test-secret")
+            finally:
+                helper.CONFIG_PATH = original_path
+                helper.urlopen = original_urlopen
+
+    def test_configure_does_not_reuse_saved_token_for_a_new_address(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            current_config = {
+                "url": "http://old-ha.local:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+            }
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps(current_config), encoding="utf-8")
+            try:
+                with patch.object(helper, "urlopen") as urlopen:
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        result = helper.configure(
+                            {
+                                "url": "http://new-ha.local:8123",
+                                "reuse_saved_token": True,
+                            },
+                            current_config,
+                        )
+                    urlopen.assert_not_called()
+                self.assertEqual(result, 1)
+                self.assertIn("Paste a Home Assistant long-lived access token", output.getvalue())
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_configure_preserves_existing_external_server_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            original_urlopen = helper.urlopen
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            current_config = {
+                "url": "http://old-ha.local:8123",
+                "token": "old-secret",
+                "entity_id": "climate.office",
+                "history_source": "server",
+                "history_remote_target": "sai@192.168.1.20",
+                "history_remote_port": 2222,
+                "history_remote_url": "http://127.0.0.1:8123",
+                "history_remote_path": "~/.local/state/custom-ac.json",
+            }
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps(current_config), encoding="utf-8")
+            helper.urlopen = lambda request, timeout: FakeResponse(
+                {"message": "API running."}
+                if request.full_url.endswith("/api/")
+                else [{
+                    "entity_id": "climate.office",
+                    "state": "cool",
+                    "attributes": {"friendly_name": "Office"},
+                }]
+            )
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = helper.configure(
+                        {"url": "new-ha.local:8123", "token": "new-secret"},
+                        current_config,
+                    )
+                self.assertEqual(result, 0)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["history_source"], "server")
+                self.assertEqual(saved["history_remote_target"], "sai@192.168.1.20")
+                self.assertEqual(saved["history_remote_port"], 2222)
+                self.assertEqual(saved["history_remote_path"], "~/.local/state/custom-ac.json")
+            finally:
+                helper.CONFIG_PATH = original_path
+                helper.urlopen = original_urlopen
+
+    def test_main_can_connect_to_external_history_without_local_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps({
+                "url": "http://ha.local:8123",
+                "entity_id": "climate.office",
+                "history_source": "server",
+            }), encoding="utf-8")
+            payload = json.dumps({
+                "ssh_target": "sai@192.168.1.20",
+                "ssh_port": "22",
+                "home_assistant_url": "http://127.0.0.1:8123",
+                "history_path": "~/.local/state/omarchy/homeassistant-ac-temperature.json",
+            }) + "\n"
+            fake_result = helper.subprocess.CompletedProcess(
+                ["ssh"], 0, "server\n", ""
+            )
+            try:
+                with patch.object(helper.subprocess, "run", return_value=fake_result) as run, \
+                        patch.object(helper.sys, "stdin", io.StringIO(payload)):
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        result = helper.main([str(HELPER), "connect-remote-history"])
+                self.assertEqual(result, 0)
+                self.assertEqual(run.call_count, 1)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["history_remote_target"], "sai@192.168.1.20")
+                self.assertTrue(json.loads(output.getvalue())["ok"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
     def test_state_payload_includes_optional_fan_controls(self):
         payload = helper.state_payload(
             {
@@ -640,6 +793,46 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(parsed["history_source"], "server")
         self.assertEqual(parsed["history_server"], "192.168.1.20")
         self.assertEqual(parsed["history"], remote_samples)
+        self.assertTrue(parsed["history_available"])
+        self.assertGreaterEqual(parsed["history_ping_ms"], 0)
+        record_local.assert_not_called()
+
+    def test_server_status_does_not_report_remote_history_as_available_on_ssh_error(self):
+        state = {
+            "entity_id": "climate.office",
+            "state": "cool",
+            "attributes": {
+                "friendly_name": "Office",
+                "current_temperature": 24,
+                "temperature": 22,
+                "temperature_unit": "C",
+            },
+        }
+        output = io.StringIO()
+        with patch.object(helper, "resolve_state", return_value=(state, ["climate.office"])), \
+                patch.object(
+                    helper,
+                    "load_remote_temperature_history",
+                    side_effect=helper.HomeAssistantError("Cannot read server history over SSH"),
+                ), \
+                patch.object(helper, "record_temperature_history") as record_local:
+            with contextlib.redirect_stdout(output):
+                result = helper.status(
+                    "http://ha.local:8123",
+                    "secret",
+                    "climate.office",
+                    {
+                        "history_source": "server",
+                        "history_remote_target": "sai@192.168.1.20",
+                        "history_remote_port": 22,
+                        "history_remote_url": "http://127.0.0.1:8123",
+                    },
+                )
+        self.assertEqual(result, 0)
+        parsed = json.loads(output.getvalue())
+        self.assertFalse(parsed["history_available"])
+        self.assertEqual(parsed["history_ping_ms"], -1)
+        self.assertIn("Cannot read server history", parsed["history_error"])
         record_local.assert_not_called()
 
     def test_remote_installer_saves_server_settings_after_ssh_success(self):
@@ -719,11 +912,16 @@ class HelperTests(unittest.TestCase):
         self.assertIn("--remove-everything", source)
 
         guide = (HELPER.parent / "EXTERNAL_SERVER_HISTORY.md").read_text(encoding="utf-8")
-        self.assertIn("external server must be the same host", guide)
-        self.assertIn("record_all_entities", guide)
-        self.assertIn("every available", guide)
+        self.assertIn("external server must be the **same Linux host", guide)
+        self.assertIn("every currently available", guide)
         self.assertIn("COPY SOURCE", guide)
         self.assertIn("ssh-copy-id", guide)
+        self.assertIn("systemctl --user enable --now ssh-agent.socket", guide)
+        self.assertIn("SSH key authentication works", guide)
+        self.assertIn("terminal paste-control characters", guide)
+        self.assertIn("ssh-add", guide)
+        self.assertNotIn('eval "$(ssh-agent -s)"', guide)
+        self.assertNotIn('ssh-keygen -t ed25519 -N ""', guide)
 
     def test_ssh_auth_error_points_to_manual_guide(self):
         result = helper.remote_history_command_error(
@@ -734,6 +932,16 @@ class HelperTests(unittest.TestCase):
         self.assertIn("Open GUIDE", result)
         self.assertNotIn("Copy the SSH guide", result)
         self.assertIn("dedicated plugin key", result)
+
+    def test_ssh_agent_errors_explain_the_gui_session_requirement(self):
+        result = helper.remote_history_command_error(
+            helper.subprocess.CompletedProcess(
+                ["ssh"], 255, "",
+                "Could not open a connection to your authentication agent."
+            )
+        )
+        self.assertIn("not available to Omarchy", result)
+        self.assertIn("desktop SSH agent", result)
 
     def test_remote_history_uses_dedicated_key_when_present(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -748,6 +956,21 @@ class HelperTests(unittest.TestCase):
             finally:
                 helper.REMOTE_HISTORY_IDENTITY_PATH = original_path
 
+    def test_remote_history_uses_standard_user_agent_when_terminal_socket_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_dir = Path(directory)
+            socket_path = runtime_dir / "ssh-agent.socket"
+            socket_path.touch()
+            with patch.dict(
+                helper.os.environ,
+                {"SSH_AUTH_SOCK": "", "XDG_RUNTIME_DIR": str(runtime_dir)},
+                clear=False,
+            ), patch.object(helper.Path, "is_socket", return_value=True):
+                self.assertEqual(
+                    helper.remote_history_agent_args(),
+                    ["-o", f"IdentityAgent={socket_path}"],
+                )
+
     def test_settings_uses_maintenance_without_privacy_banner_or_copy_guide(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
         self.assertIn('label: "MAINTENANCE"', panel)
@@ -755,6 +978,22 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("NO TELEMETRY LOGGING", panel)
         self.assertNotIn("COPY GUIDE", panel)
         self.assertIn("EXTERNAL_SERVER_HISTORY.md", panel)
+
+    def test_external_server_reconnect_does_not_always_install(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn('command = ["python3", root.helperPath, "connect-remote-history"]', panel)
+        self.assertIn('"CONNECT TO SERVER"', panel)
+        self.assertIn('"INSTALL / UPDATE TIMER"', panel)
+        self.assertNotIn('"INSTALL SERVER TIMER"', panel)
+        self.assertIn("remoteHistoryConnected", panel)
+        self.assertIn("history_available", panel)
+        self.assertIn("history_ping_ms", panel)
+        self.assertNotIn('text: "PAIRED"', panel)
+        self.assertNotIn(
+            'id: externalHistoryConnectionStatus\n'
+            '                          connected: root.connected',
+            panel,
+        )
 
     def test_settings_sections_put_experimental_before_maintenance(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")

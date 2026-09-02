@@ -125,6 +125,8 @@ These options are optional and separate from the default single-AC workflow.
 ### Maintenance
 
 - **Reconfigure** changes the current Home Assistant address, token, or entity.
+  When reconnecting to the same address, the token can be left blank to reuse
+  the saved token locally.
 - **Home Assistant Settings** opens the connected Home Assistant panel.
 - **Local Home Assistant** can install or reconfigure an official Home
   Assistant Container on this PC.
@@ -141,13 +143,18 @@ local API, so an unrelated SSH machine cannot provide the chart history. When
 installed, a user-owned systemd timer records while that host is on, including
 while this PC sleeps, shuts down, or restarts.
 
-The plugin uses SSH key authentication for installation and later history
-reads. Set up the key once, select **EXTERNAL SERVER** in Preferences, enter
-the SSH target and the Home Assistant URL as seen from that host (usually
-`http://127.0.0.1:8123`), then choose **INSTALL SERVER TIMER**.
+The [External Server History guide](EXTERNAL_SERVER_HISTORY.md) is the complete
+setup path. It creates a dedicated key once, loads it into Omarchy's stable
+per-user SSH-agent socket, verifies non-interactive SSH, and then walks through
+the plugin. A passphrase-protected key stays encrypted on disk; a blank
+passphrase is supported but is less secure.
 
-Read the separate [External Server History guide](EXTERNAL_SERVER_HISTORY.md)
-for the one-time key setup, manual installation, review steps, and cleanup.
+In Preferences, enter the SSH target as `user@host` and put the port in its
+separate field. Enter the Home Assistant URL as seen from that host, usually
+`http://127.0.0.1:8123`. Choose **CONNECT TO SERVER** for an existing logger;
+it verifies SSH and saves the pairing without copying files, sending the token,
+or reinstalling the timer. Choose **INSTALL / UPDATE TIMER** only for a
+first-time setup or when the remote logger configuration needs changing.
 
 The installer is intentionally narrow: no sudo, package installation, open
 ports, telemetry, or Home Assistant control calls. It creates only the named

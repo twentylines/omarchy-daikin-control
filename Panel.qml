@@ -229,9 +229,10 @@ Panel {
   property string remoteHistoryUrl: "http://127.0.0.1:8123"
   property string remoteHistoryPath: "~/.local/state/omarchy/homeassistant-ac-temperature.json"
   property bool remoteHistoryBusy: false
+  property string remoteHistoryAction: ""
   property bool remoteHistorySourceBusy: false
   property string remoteHistorySourcePayload: ""
-  property bool remoteHistoryInstallSucceeded: false
+  property bool remoteHistoryOperationSucceeded: false
   property bool remoteHistoryReconfiguring: false
   property string remoteHistoryMessage: ""
   property string remoteHistoryError: ""
@@ -240,6 +241,11 @@ Panel {
   property string remoteHistoryPortBeforeReconfigure: "22"
   property string remoteHistoryUrlBeforeReconfigure: ""
   property string remoteHistoryPathBeforeReconfigure: ""
+  property string remoteHistoryStatusTarget: ""
+  property string remoteHistoryStatusPortText: ""
+  property string remoteHistoryStatusPath: ""
+  property bool remoteHistoryStatusAvailable: false
+  property real remoteHistoryStatusPingMs: -1
   property string settingsSection: "preferences"
   property bool setupSucceeded: false
   property string setupUrl: "http://homeassistant.local:8123"
@@ -256,6 +262,34 @@ Panel {
   ]
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
+
+  function relativeLuminance(color) {
+    function linearChannel(value) {
+      var channel = Math.max(0, Math.min(1, Number(value)))
+      return channel <= 0.03928 ? channel / 12.92
+        : Math.pow((channel + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linearChannel(color.r)
+      + 0.7152 * linearChannel(color.g)
+      + 0.0722 * linearChannel(color.b)
+  }
+
+  function textContrast(surface, textColor) {
+    var surfaceLuminance = root.relativeLuminance(surface)
+    var textLuminance = root.relativeLuminance(textColor)
+    var brighter = Math.max(surfaceLuminance, textLuminance)
+    var darker = Math.min(surfaceLuminance, textLuminance)
+    return (brighter + 0.05) / (darker + 0.05)
+  }
+
+  function contrastingTextColor(surface) {
+    var lightText = Color.foreground
+    var darkText = Color.popups.background
+    return root.textContrast(surface, lightText) >= root.textContrast(surface, darkText)
+      ? lightText : darkText
+  }
+
+  readonly property color accentTextColor: root.contrastingTextColor(root.accentColor)
 
   function normalizeAppearanceDeviceColors(value) {
     var source = value
@@ -550,6 +584,19 @@ Panel {
       || text === "https://localhost:8123"
   }
 
+  function sameHomeAssistantAddress(first, second) {
+    function canonical(value) {
+      var text = String(value || "").trim()
+      if (text === "") return ""
+      if (text.indexOf("://") === -1) text = "http://" + text
+      text = text.replace(/\/api\/?$/i, "").replace(/\/+$/, "")
+      return text.toLowerCase()
+    }
+    var firstAddress = canonical(first)
+    var secondAddress = canonical(second)
+    return firstAddress !== "" && firstAddress === secondAddress
+  }
+
   readonly property var dropdownOptions: [{
     value: "",
     label: "Choose an air conditioner"
@@ -588,6 +635,9 @@ Panel {
     { value: "experimental", label: "EXPERIMENTAL" },
     { value: "maintenance", label: "MAINTENANCE" },
   ])
+  readonly property bool reconnectCanReuseSavedToken: configured
+    && root.sameHomeAssistantAddress(setupUrl, activeHomeAssistantUrl)
+    && String(setupToken || "").trim() === ""
   readonly property bool setupCanSubmit: !setupBusy
     && !preferenceBusy
     && !localServerBusy
@@ -608,7 +658,7 @@ Panel {
     && !uninstallBusy
     && !masterSwitchBusy
     && String(setupUrl || "").trim() !== ""
-    && String(setupToken || "").trim() !== ""
+    && (String(setupToken || "").trim() !== "" || root.reconnectCanReuseSavedToken)
     && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
   readonly property string setupActionLabel: setupEntityOptions.length > 0
     ? "SAVE & CONTINUE" : "CONNECT & CONTINUE"
@@ -620,8 +670,29 @@ Panel {
   readonly property bool separateRemotesActive: multiUnitActive && !globalSyncControls
     && !syncNonPowerControls
   readonly property bool showMainRemote: !multiUnitActive || globalSyncControls || syncNonPowerControls
-  readonly property bool remoteHistoryPaired: historySource === "server"
+  readonly property bool remoteHistoryConfigured: historySource === "server"
     && String(remoteHistoryTarget || "").trim() !== ""
+  readonly property bool remoteHistoryStatusMatchesCurrent:
+    root.remoteHistoryStatusTarget !== ""
+    && root.remoteHistoryStatusTarget === String(root.remoteHistoryTarget || "").trim()
+    && root.remoteHistoryStatusPortText === String(root.remoteHistoryPortText || "22").trim()
+    && root.remoteHistoryStatusPath === String(root.remoteHistoryPath || root.remoteHistoryDefaultPath).trim()
+  readonly property bool remoteHistoryConnected: root.remoteHistoryConfigured
+    && root.remoteHistoryStatusMatchesCurrent
+    && root.remoteHistoryStatusAvailable
+  readonly property real remoteHistoryPingMs: root.remoteHistoryConnected
+    && isFinite(Number(root.remoteHistoryStatusPingMs))
+    ? Number(root.remoteHistoryStatusPingMs) : -1
+  readonly property string remoteHistoryStatusText: {
+    if (!root.remoteHistoryConfigured) return "NOT CONFIGURED"
+    if (root.remoteHistoryBusy && root.remoteHistoryAction === "connect") return "CONNECTING…"
+    if (statusProcess.running && !root.remoteHistoryStatusMatchesCurrent) return "CHECKING…"
+    if (!root.remoteHistoryStatusMatchesCurrent) return "NOT VERIFIED"
+    return root.remoteHistoryConnected ? "CONNECTED" : "UNAVAILABLE"
+  }
+  readonly property color remoteHistoryStatusColor: root.remoteHistoryConnected
+    ? root.accentColor
+    : root.remoteHistoryStatusText === "CHECKING…" ? root.dim : root.urgent
   readonly property bool barIsOn: connected && multiUnitActive
     ? anyUnitOn() : isOn
   readonly property bool actualIsOn: connected && String(reading.state || "").toLowerCase() !== "off"
@@ -1552,6 +1623,7 @@ Panel {
     setupPayload = JSON.stringify({
       url: String(setupUrl || "").trim(),
       token: String(setupToken || "").trim(),
+      reuse_saved_token: reconnect === true && root.reconnectCanReuseSavedToken,
       entity_id: setupSelectedEntity,
       advanced_controls: root.showClimateControls,
       master_switch_enabled: root.masterSwitchEnabled,
@@ -1613,6 +1685,28 @@ Panel {
       return
     }
     remoteHistoryMessage = "External-server setup guide opened."
+  }
+
+  function clearRemoteHistoryStatus() {
+    remoteHistoryStatusTarget = ""
+    remoteHistoryStatusPortText = ""
+    remoteHistoryStatusPath = ""
+    remoteHistoryStatusAvailable = false
+    remoteHistoryStatusPingMs = -1
+  }
+
+  function recordRemoteHistoryStatus(parsed) {
+    if (!parsed || parsed.history_source !== "server") {
+      root.clearRemoteHistoryStatus()
+      return
+    }
+    remoteHistoryStatusTarget = String(remoteHistoryTarget || "").trim()
+    remoteHistoryStatusPortText = String(remoteHistoryPortText || "22").trim()
+    remoteHistoryStatusPath = String(remoteHistoryPath || root.remoteHistoryDefaultPath).trim()
+    remoteHistoryStatusAvailable = parsed.history_available === true
+    var ping = Number(parsed.history_ping_ms)
+    remoteHistoryStatusPingMs = remoteHistoryStatusAvailable && isFinite(ping) && ping >= 0
+      ? ping : -1
   }
 
   function beginRemoteHistoryReconfigure() {
@@ -1678,7 +1772,9 @@ Panel {
       return
     }
     remoteHistoryBusy = true
-    remoteHistoryInstallSucceeded = false
+    remoteHistoryAction = "install"
+    remoteHistoryOperationSucceeded = false
+    root.clearRemoteHistoryStatus()
     remoteHistoryMessage = "Installing a server timer over SSH…"
     remoteHistoryError = ""
     remoteHistoryPayload = JSON.stringify({
@@ -1691,6 +1787,29 @@ Panel {
       history_path: root.remoteHistoryPath,
     })
     remoteHistoryProcess.command = ["python3", root.helperPath, "install-remote-history"]
+    remoteHistoryProcess.running = true
+  }
+
+  function startRemoteHistoryConnect() {
+    if (remoteHistoryBusy || remoteHistorySourceBusy || setupBusy || preferenceBusy) return
+    var target = String(remoteHistoryTarget || "").trim()
+    if (target === "") {
+      remoteHistoryError = "Enter the external server address, such as user@192.168.1.20."
+      return
+    }
+    remoteHistoryBusy = true
+    remoteHistoryAction = "connect"
+    remoteHistoryOperationSucceeded = false
+    root.clearRemoteHistoryStatus()
+    remoteHistoryMessage = "Connecting to the external server over SSH…"
+    remoteHistoryError = ""
+    remoteHistoryPayload = JSON.stringify({
+      ssh_target: target,
+      ssh_port: String(remoteHistoryPortText || "22").trim(),
+      home_assistant_url: String(remoteHistoryUrl || "").trim(),
+      history_path: root.remoteHistoryPath,
+    })
+    remoteHistoryProcess.command = ["python3", root.helperPath, "connect-remote-history"]
     remoteHistoryProcess.running = true
   }
 
@@ -1710,7 +1829,7 @@ Panel {
   function applyRemoteHistoryResult(raw) {
     var text = String(raw || "").trim()
     if (text === "") {
-      remoteHistoryError = "The server history installer returned no data."
+      remoteHistoryError = "The external server connection returned no data."
       remoteHistoryMessage = ""
       return
     }
@@ -1728,17 +1847,17 @@ Panel {
         remoteHistoryUrlBeforeReconfigure = remoteHistoryUrl
         remoteHistoryPathBeforeReconfigure = remoteHistoryPath
         remoteHistoryError = ""
-        remoteHistoryMessage = String(parsed.message || "Server history logger installed.")
-        remoteHistoryInstallSucceeded = true
-        remoteHistoryReconfiguring = false
+        remoteHistoryMessage = String(parsed.message || "External server connection saved.")
+        remoteHistoryOperationSucceeded = true
+        remoteHistoryReconfiguring = parsed.history_available === false
         return
       }
-      remoteHistoryInstallSucceeded = false
+      remoteHistoryOperationSucceeded = false
       remoteHistoryMessage = ""
       remoteHistoryError = parsed && parsed.error
         ? String(parsed.error) : "The server history installer could not complete."
     } catch (e) {
-      remoteHistoryInstallSucceeded = false
+      remoteHistoryOperationSucceeded = false
       remoteHistoryMessage = ""
       remoteHistoryError = "The server history installer returned invalid data."
     }
@@ -2192,6 +2311,7 @@ Panel {
       remoteHistoryPortText = String(parsed.history_remote_port || "22")
       remoteHistoryUrl = String(parsed.history_remote_url || root.remoteHistoryDefaultUrl)
       remoteHistoryPath = String(parsed.history_remote_path || root.remoteHistoryDefaultPath)
+      root.clearRemoteHistoryStatus()
       if (parsed.url) {
         setupUrl = String(parsed.url)
         activeHomeAssistantUrl = setupUrl
@@ -2319,6 +2439,7 @@ Panel {
   function applyResult(raw, source) {
     var text = String(raw || "").trim()
     if (text === "") {
+      if (source === "status") root.clearRemoteHistoryStatus()
       if (source === "action" && hasLocalPower) {
         errorText = ""
         return
@@ -2350,6 +2471,7 @@ Panel {
     try {
       var parsed = JSON.parse(text)
       if (parsed && parsed.configured === false && parsed.ok !== true) {
+        if (source === "status") root.clearRemoteHistoryStatus()
         configured = false
         root.clearUnitLocalStates()
         setupUrl = String(parsed.url || setupUrl)
@@ -2397,6 +2519,7 @@ Panel {
       if (parsed && parsed.ok === true) {
         configured = true
         reading = parsed
+        if (source === "status") root.recordRemoteHistoryStatus(parsed)
         selectedEntity = String(parsed.entity_id || selectedEntity)
         unitReadings = Array.isArray(parsed.units) && parsed.units.length > 0
           ? parsed.units : [parsed]
@@ -2440,6 +2563,7 @@ Panel {
         if (unitError !== "") statusMessages.push(unitError)
         errorText = statusMessages.join(" ")
       } else {
+        if (source === "status") root.clearRemoteHistoryStatus()
         if (source === "action" && hasLocalPower) {
           errorText = ""
           return
@@ -2469,6 +2593,7 @@ Panel {
         }
       }
     } catch (e) {
+      if (source === "status") root.clearRemoteHistoryStatus()
       if (source === "action" && hasLocalPower) {
         errorText = ""
         return
@@ -3504,7 +3629,8 @@ Panel {
     }
     onExited: {
       root.remoteHistoryBusy = false
-      if (root.remoteHistoryInstallSucceeded) Qt.callLater(root.refresh)
+      root.remoteHistoryAction = ""
+      if (root.remoteHistoryOperationSucceeded) Qt.callLater(root.refresh)
     }
   }
 
@@ -5067,7 +5193,7 @@ Panel {
               BorderSurface {
                 id: remoteHistoryCard
                 width: parent.width
-                implicitHeight: (root.remoteHistoryPaired && !root.remoteHistoryReconfiguring
+                implicitHeight: (root.remoteHistoryConfigured && !root.remoteHistoryReconfiguring
                   ? remoteHistoryPairedSummary.implicitHeight : remoteHistoryForm.implicitHeight)
                   + Style.space(24)
                 radius: root.compactRadius
@@ -5085,7 +5211,7 @@ Panel {
                   anchors.top: parent.top
                   anchors.margins: Style.space(12)
                   spacing: Style.space(7)
-                  visible: root.remoteHistoryPaired && !root.remoteHistoryReconfiguring
+                  visible: root.remoteHistoryConfigured && !root.remoteHistoryReconfiguring
                   height: visible ? implicitHeight : 0
                   opacity: visible ? 1 : 0
                   clip: true
@@ -5131,17 +5257,19 @@ Panel {
                         spacing: Style.space(8)
 
                         Text {
-                          text: "PAIRED"
-                          color: root.dim
+                          text: root.remoteHistoryStatusText
+                          color: root.remoteHistoryStatusColor
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
                           font.bold: true
+                          font.letterSpacing: 0.8
                         }
 
                         ServerStatus {
                           id: externalHistoryConnectionStatus
-                          connected: root.connected
-                          pingMs: root.homeAssistantPingMs
+                          visible: root.remoteHistoryConnected
+                          connected: true
+                          pingMs: root.remoteHistoryPingMs
                           statusSpacing: Style.space(8)
                           foreground: root.foreground
                           urgentColor: root.urgent
@@ -5176,7 +5304,7 @@ Panel {
                   Button {
                     width: parent.width
                     height: Style.space(36)
-                    text: "RECONFIGURE"
+                    text: "RECONNECT / CHANGE"
                     fontSize: Style.font.caption
                     fontFamily: root.fontFamily
                     foreground: root.foreground
@@ -5199,7 +5327,7 @@ Panel {
                   anchors.top: parent.top
                   anchors.margins: Style.space(12)
                   spacing: Style.space(7)
-                  visible: !root.remoteHistoryPaired || root.remoteHistoryReconfiguring
+                  visible: !root.remoteHistoryConfigured || root.remoteHistoryReconfiguring
                   height: visible ? implicitHeight : 0
                   opacity: visible ? 1 : 0
                   clip: true
@@ -5284,7 +5412,7 @@ Panel {
 
                       Text {
                         width: parent.width
-                        text: "SSH TARGET"
+                        text: "SSH SERVER ADDRESS"
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -5369,55 +5497,87 @@ Panel {
 
                   Text {
                     width: parent.width
-                    text: "Use the URL reachable from that same external host, usually http://127.0.0.1:8123. The token is sent through encrypted SSH stdin, stored owner-only, and used by one user systemd timer."
+                    text: "Use the URL reachable from that same external host, usually http://127.0.0.1:8123. CONNECT TO SERVER only verifies SSH and saves this pairing. INSTALL / UPDATE TIMER is only for first-time setup or when the remote logger needs changing."
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     wrapMode: Text.WordWrap
                   }
 
-                  Row {
-                    id: remoteHistoryInstallRow
+                  Column {
+                    id: remoteHistoryActionColumn
                     width: parent.width
                     spacing: Style.space(6)
 
                     Button {
-                      id: remoteHistoryInstallButton
-                      width: parent.width - (remoteHistoryCancelButton.visible
-                        ? remoteHistoryCancelButton.width + parent.spacing : 0)
-                      height: Style.space(40)
-                      text: root.remoteHistoryBusy ? "INSTALLING…" : "INSTALL SERVER TIMER"
+                      id: remoteHistoryConnectButton
+                      width: parent.width
+                      height: Style.space(44)
+                      text: root.remoteHistoryBusy && root.remoteHistoryAction === "connect"
+                        ? "CONNECTING…" : "CONNECT TO SERVER"
                       iconText: root.remoteHistoryBusy ? "" : "󰒓"
                       iconSize: Style.font.body
-                      fontSize: Style.font.caption
+                      fontSize: Style.font.bodySmall
                       fontFamily: root.fontFamily
-                      foreground: Color.popups.background
+                      foreground: root.accentTextColor
                       accent: root.controlAccentColor
                       background: root.accentColor
                       bordered: false
                       radius: root.compactRadius
                       enabled: !root.remoteHistoryBusy
                         && !root.remoteHistorySourceBusy && !root.preferenceBusy
-                      tooltipText: "Copy the reviewed files and install one user timer over SSH"
-                      onClicked: root.startRemoteHistoryInstall()
+                      tooltipText: "Verify the SSH address and pair with an existing external history server"
+                      onClicked: root.startRemoteHistoryConnect()
 
                       LoadingRing {
-                        visible: root.remoteHistoryBusy
+                        visible: root.remoteHistoryBusy && root.remoteHistoryAction === "connect"
                         anchors.left: parent.left
                         anchors.leftMargin: Style.space(12)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Style.space(16)
                         height: width
-                        color: Color.popups.background
+                        color: root.accentTextColor
+                        strokeWidth: Style.space(2)
+                      }
+                    }
+
+                    Button {
+                      id: remoteHistoryInstallButton
+                      width: parent.width
+                      height: Style.space(44)
+                      text: root.remoteHistoryBusy && root.remoteHistoryAction === "install"
+                        ? "INSTALLING…" : "INSTALL / UPDATE TIMER"
+                      iconText: root.remoteHistoryBusy ? "" : "󰒓"
+                      iconSize: Style.font.body
+                      fontSize: Style.font.bodySmall
+                      fontFamily: root.fontFamily
+                      foreground: root.foreground
+                      accent: root.controlAccentColor
+                      background: root.alpha(root.foreground, 0.06)
+                      bordered: true
+                      radius: root.compactRadius
+                      enabled: !root.remoteHistoryBusy
+                        && !root.remoteHistorySourceBusy && !root.preferenceBusy
+                      tooltipText: "Copy the reviewed files and install or update the user timer over SSH"
+                      onClicked: root.startRemoteHistoryInstall()
+
+                      LoadingRing {
+                        visible: root.remoteHistoryBusy && root.remoteHistoryAction === "install"
+                        anchors.left: parent.left
+                        anchors.leftMargin: Style.space(12)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(16)
+                        height: width
+                        color: root.foreground
                         strokeWidth: Style.space(2)
                       }
                     }
 
                     Button {
                       id: remoteHistoryCancelButton
-                      visible: root.remoteHistoryPaired && root.remoteHistoryReconfiguring
-                      width: visible ? Style.space(86) : 0
-                      height: Style.space(40)
+                      visible: root.remoteHistoryConfigured && root.remoteHistoryReconfiguring
+                      width: parent.width
+                      height: visible ? Style.space(40) : 0
                       text: "CANCEL"
                       fontSize: Style.font.caption
                       fontFamily: root.fontFamily
@@ -6959,7 +7119,7 @@ Panel {
                 width: parent.width
                 enabled: root.connectionEditing && !root.setupBusy
                 password: true
-                placeholderText: "Paste a token for this server"
+                placeholderText: "Leave blank to reuse the saved token for this address"
                 text: root.setupToken
                 foreground: root.foreground
                 accent: root.controlAccentColor
@@ -6968,6 +7128,15 @@ Panel {
                 onTextChanged: if (text !== root.setupToken) root.setupToken = text
                 onAccepted: root.submitSetup(true)
                 Keys.onEscapePressed: root.cancelReconnect()
+              }
+
+              Text {
+                width: parent.width
+                text: "For the current Home Assistant address, leaving this blank reuses the saved token locally. Enter a new token only when changing servers or rotating credentials."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
 
               AcDropdown {
