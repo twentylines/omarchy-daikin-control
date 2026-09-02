@@ -1895,6 +1895,14 @@ Panel {
     return String(next).replace(/\.0$/, "")
   }
 
+  function formatHistoryDuration(value) {
+    var next = normalizeHistoryHours(value)
+    if (next === 1) return "1 HOUR"
+    if (next === 168) return "7 DAYS"
+    if (next === 720) return "30 DAYS"
+    return root.formatHours(next) + " HOURS"
+  }
+
   function historyPresetValue(value) {
     var next = Number(value)
     return isFinite(next) && [1, 3, 6, 12, 24, 168, 720].indexOf(next) !== -1
@@ -7060,8 +7068,8 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: "ROLLING WINDOW · PAST " + root.formatHours(root.historyHours)
-                    + " ENDING NOW"
+                  text: "READINGS FROM THE LAST "
+                    + root.formatHistoryDuration(root.historyHours)
                   color: root.accentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
