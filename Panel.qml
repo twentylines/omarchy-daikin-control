@@ -429,6 +429,19 @@ Panel {
     if (configFileEditor) configFileEditor.text = configFileText
   }
 
+  function reloadConfigFile() {
+    if (configFileBusy || preferenceProcess.running) return
+    configFileError = ""
+    configFileStatus = ""
+    root.refreshConfigFileText()
+  }
+
+  function configFileBackwardTab(event) {
+    return event.key === Qt.Key_Backtab
+      || (event.key === Qt.Key_Tab
+        && (event.modifiers & Qt.ShiftModifier) !== 0)
+  }
+
   function applyConfigFileState(parsed) {
     if (!parsed) return
     if (parsed.entity_id) {
@@ -518,9 +531,13 @@ Panel {
         configFileError = ""
         configFileStatus = parsed.shortcut_sync_error
           ? "Saved, but keyboard bindings need attention."
-          : "Saved. Ctrl+Enter applies the JSON; settings stay available below."
+          : "Saved. Ctrl+S or Ctrl+Enter applies the JSON; use the SETTINGS toggle to exit."
         root.refreshConfigFileText()
-        Qt.callLater(root.refresh)
+        Qt.callLater(function() {
+          root.refresh()
+          if (root.configFileModeEnabled && configFileEditor)
+            configFileEditor.forceActiveFocus()
+        })
         return
       }
       configFileError = parsed && parsed.error
@@ -4489,7 +4506,8 @@ Panel {
         || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
         || reconnectEntityDropdown.popupOpen
         || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
-        || remoteHistoryUrlField.activeFocus || configFileEditor.activeFocus
+        || remoteHistoryUrlField.activeFocus || root.configFileModeEnabled
+        || configFileEditor.activeFocus
         || root.shortcutCaptureActive)
       onCloseRequested: {
         if (root.setupOpen && root.configured) {
@@ -4591,6 +4609,7 @@ Panel {
               visible: root.configured
               width: parent.width
               height: Style.space(38)
+              focusable: true
               text: "BACK TO AC CONTROLS"
               iconText: "←"
               iconSize: Style.font.body
@@ -4604,6 +4623,12 @@ Panel {
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               tooltipText: "Return to the AC controls"
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  event.accepted = true
+                  root.cancelSetup()
+                }
+              }
               onClicked: root.cancelSetup()
             }
 
@@ -4630,6 +4655,21 @@ Panel {
               fontFamily: root.fontFamily
               chromeLess: root.compactChromeEnabled
               onClicked: root.setConfigFileModeEnabled(!root.configFileModeEnabled)
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  event.accepted = true
+                  root.setConfigFileModeEnabled(false)
+                } else if (event.key === Qt.Key_Tab) {
+                  event.accepted = true
+                  if (root.configFileBackwardTab(event))
+                    backToControlsButton.forceActiveFocus()
+                  else
+                    configFileEditor.forceActiveFocus()
+                } else if (event.key === Qt.Key_Backtab) {
+                  event.accepted = true
+                  backToControlsButton.forceActiveFocus()
+                }
+              }
             }
 
             Row {
@@ -4671,6 +4711,20 @@ Panel {
           radius: root.panelRadius
           color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
           borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) {
+              event.accepted = true
+              root.setConfigFileModeEnabled(false)
+            } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                && event.key === Qt.Key_R) {
+              event.accepted = true
+              root.reloadConfigFile()
+            } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                && event.key === Qt.Key_S) {
+              event.accepted = true
+              root.applyConfigFile()
+            }
+          }
 
           Column {
             id: configFileForm
@@ -4710,7 +4764,7 @@ Panel {
 
               Text {
                 id: configFileHint
-                text: "CTRL+ENTER"
+                text: "CTRL+S / CTRL+ENTER"
                 color: root.accentColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -4721,7 +4775,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Edit the settings document below and press Ctrl+Enter to apply. The saved Home Assistant connection URL and token stay protected and are never shown here."
+              text: "Edit JSON with the keyboard. Ctrl+S or Ctrl+Enter applies, Ctrl+R reloads, and Tab cycles through the editor actions. The saved Home Assistant connection URL and token stay protected and are never shown here."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -4742,6 +4796,7 @@ Panel {
               padding: Style.space(10)
               selectByMouse: true
               persistentSelection: true
+              textFormat: TextEdit.PlainText
               wrapMode: TextEdit.NoWrap
               activeFocusOnTab: true
               background: Rectangle {
@@ -4760,10 +4815,21 @@ Panel {
                 root.setConfigFileModeEnabled(false)
               }
               Keys.onPressed: function(event) {
-                if ((event.modifiers & Qt.ControlModifier) !== 0
-                    && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                  event.accepted = true
+                  if (root.configFileBackwardTab(event))
+                    configFileModeToggle.forceActiveFocus()
+                  else
+                    configFileApplyButton.forceActiveFocus()
+                } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                    && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                      || event.key === Qt.Key_S)) {
                   event.accepted = true
                   root.applyConfigFile()
+                } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                    && event.key === Qt.Key_R) {
+                  event.accepted = true
+                  root.reloadConfigFile()
                 }
               }
             }
@@ -4793,6 +4859,7 @@ Panel {
               spacing: Style.space(8)
 
               Button {
+                id: configFileApplyButton
                 width: parent.width - configFileReloadButton.width - parent.spacing
                 height: Style.space(38)
                 text: root.configFileBusy ? "APPLYING…" : "APPLY CONFIG"
@@ -4806,6 +4873,19 @@ Panel {
                 background: root.accentColor
                 bordered: false
                 radius: root.compactRadius
+                focusable: true
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                    event.accepted = true
+                    if (root.configFileBackwardTab(event))
+                      configFileEditor.forceActiveFocus()
+                    else
+                      configFileReloadButton.forceActiveFocus()
+                  } else if (event.key === Qt.Key_Escape) {
+                    event.accepted = true
+                    root.setConfigFileModeEnabled(false)
+                  }
+                }
                 onClicked: root.applyConfigFile()
               }
 
@@ -4822,11 +4902,22 @@ Panel {
                 background: root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
+                focusable: true
                 tooltipText: "Discard edits and reload the current settings"
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                    event.accepted = true
+                    if (root.configFileBackwardTab(event))
+                      configFileApplyButton.forceActiveFocus()
+                    else
+                      configFileModeToggle.forceActiveFocus()
+                  } else if (event.key === Qt.Key_Escape) {
+                    event.accepted = true
+                    root.setConfigFileModeEnabled(false)
+                  }
+                }
                 onClicked: {
-                  root.configFileError = ""
-                  root.configFileStatus = ""
-                  root.refreshConfigFileText()
+                  root.reloadConfigFile()
                 }
               }
             }

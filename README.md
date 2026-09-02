@@ -120,9 +120,10 @@ Local history is recorded while this PC is available. The chart keeps up to
   while preserving readable padding.
 - **Config file mode** is enabled from **Experimental**. Once enabled, it
   replaces the settings panes with a keyboard-first JSON editor under the
-  **SETTINGS** title, where the mode can be disabled again. Press **Ctrl+Enter**
-  to validate and save; the saved Home Assistant connection URL and token are
-  never included in the document.
+  **SETTINGS** title, where the mode can be disabled again. Press **Ctrl+S** or
+  **Ctrl+Enter** to validate and save, **Ctrl+R** to reload, and use **Tab** or
+  **Shift+Tab** to move through the editor actions. The saved Home Assistant
+  connection URL and token are never included in the document.
 - **Keyboard shortcuts** enables a dedicated **Shortcuts** section where each
   shortcut can be edited or disabled. **Reset shortcuts** restores the defaults.
 - With multiple ACs and **Globally synced controls** off, the power shortcut
