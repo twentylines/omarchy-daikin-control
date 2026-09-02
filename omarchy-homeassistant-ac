@@ -495,6 +495,9 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         "bar_temperature_entities": display_entities,
         "experimental_history_enabled": preference_enabled(config.get("experimental_history_enabled")),
         "shortcuts_enabled": preference_enabled(config.get("shortcuts_enabled", False)),
+        "global_tab_navigation_enabled": preference_enabled(
+            config.get("global_tab_navigation_enabled", False)
+        ),
         "config_file_mode_enabled": preference_enabled(
             config.get("config_file_mode_enabled", False)
         ),
@@ -765,7 +768,7 @@ def prune_temperature_history(
 
 
 def record_temperature_history(entity_id: str, value: Any, unit: str) -> list[dict[str, Any]]:
-    """Append one ambient reading and retain exactly the latest 24 hours."""
+    """Append one ambient reading and retain the configured 31-day archive."""
     history = prune_temperature_history(load_temperature_history(), time.time())
     numeric_value = number(value)
     entity_id = str(entity_id or "").strip()
@@ -1250,52 +1253,86 @@ def list_entities(url: str, token: str) -> list[dict[str, Any]]:
 def turn_off_all(url: str, token: str) -> int:
     entities = list_entities(url, token)
     entity_ids = [str(entity["id"]) for entity in entities]
+    # Keep the operation reversible: devices that were already off must not
+    # be included in the bulk request or in any later cancellation scope.
+    previously_on = [
+        str(entity["id"])
+        for entity in entities
+        if str(entity.get("state") or "").lower() != "off"
+    ]
     if not entity_ids:
         return fail("No available Home Assistant climate entities were found")
+    if not previously_on:
+        return emit({
+            "ok": True,
+            "turned_off": [],
+            "previously_on": [],
+            "count": 0,
+            "message": "All available climate devices were already off.",
+        })
     try:
-        call_service(url, token, "turn_off", {"entity_id": entity_ids})
+        call_service(url, token, "turn_off", {"entity_id": previously_on})
     except HomeAssistantError as exc:
-        verified = verify_all_power_state(url, token, expected_on=False) \
+        verified = verify_power_state(url, token, previously_on, expected_on=False) \
             if request_may_have_reached_home_assistant(exc) else None
         if verified is None:
             raise
         return emit({
             "ok": True,
             "turned_off": verified,
+            "previously_on": previously_on,
             "count": len(verified),
             "verified": True,
-            "message": "Turn-off request timed out, but Home Assistant reports every climate device off.",
+            "message": "Turn-off request timed out, but Home Assistant reports the targeted climate devices off.",
         })
     return emit({
         "ok": True,
-        "turned_off": entity_ids,
-        "count": len(entity_ids),
+        "turned_off": previously_on,
+        "previously_on": previously_on,
+        "count": len(previously_on),
     })
 
 
 def turn_on_all(url: str, token: str) -> int:
     entities = list_entities(url, token)
     entity_ids = [str(entity["id"]) for entity in entities]
+    # Symmetrically, only touch devices that were actually off before this
+    # request; already-on devices must not become part of a reverse action.
+    previously_off = [
+        str(entity["id"])
+        for entity in entities
+        if str(entity.get("state") or "").lower() == "off"
+    ]
     if not entity_ids:
         return fail("No available Home Assistant climate entities were found")
+    if not previously_off:
+        return emit({
+            "ok": True,
+            "turned_on": [],
+            "previously_off": [],
+            "count": 0,
+            "message": "All available climate devices were already on.",
+        })
     try:
-        call_service(url, token, "turn_on", {"entity_id": entity_ids})
+        call_service(url, token, "turn_on", {"entity_id": previously_off})
     except HomeAssistantError as exc:
-        verified = verify_all_power_state(url, token, expected_on=True) \
+        verified = verify_power_state(url, token, previously_off, expected_on=True) \
             if request_may_have_reached_home_assistant(exc) else None
         if verified is None:
             raise
         return emit({
             "ok": True,
             "turned_on": verified,
+            "previously_off": previously_off,
             "count": len(verified),
             "verified": True,
-            "message": "Turn-on request timed out, but Home Assistant reports every climate device on.",
+            "message": "Turn-on request timed out, but Home Assistant reports the targeted climate devices on.",
         })
     return emit({
         "ok": True,
-        "turned_on": entity_ids,
-        "count": len(entity_ids),
+        "turned_on": previously_off,
+        "previously_off": previously_off,
+        "count": len(previously_off),
     })
 
 
@@ -1515,6 +1552,7 @@ def set_config_file(config: dict[str, Any], payload: dict[str, Any]) -> int:
         "average_temperature_decimals",
         "experimental_history_enabled",
         "shortcuts_enabled",
+        "global_tab_navigation_enabled",
         "config_file_mode_enabled",
         "custom_appearance_enabled",
         "appearance_auto_accent",
@@ -1781,6 +1819,7 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "bar_temperature_entities": previous_experimental["bar_temperature_entities"],
         "experimental_history_enabled": previous_experimental["experimental_history_enabled"],
         "shortcuts_enabled": previous_experimental["shortcuts_enabled"],
+        "global_tab_navigation_enabled": previous_experimental["global_tab_navigation_enabled"],
         "config_file_mode_enabled": previous_experimental["config_file_mode_enabled"],
         "shortcuts": previous_experimental["shortcuts"],
         "custom_appearance_enabled": previous_experimental["custom_appearance_enabled"],
@@ -1968,16 +2007,20 @@ def request_may_have_reached_home_assistant(error: HomeAssistantError) -> bool:
     return any(marker in message for marker in ("timed out", "timeout", "cannot reach", "unreachable"))
 
 
-def verify_all_power_state(url: str, token: str, expected_on: bool) -> list[str] | None:
-    """Check state after a transport timeout without repeating the control call."""
+def verify_power_state(
+    url: str, token: str, entity_ids: list[str], expected_on: bool
+) -> list[str] | None:
+    """Verify only the entities involved in a power operation."""
     try:
         entities = list_entities(url, token)
     except HomeAssistantError:
         return None
-    if not entities:
-        return None
-    if all((str(entity.get("state") or "").lower() != "off") == expected_on for entity in entities):
-        return [str(entity["id"]) for entity in entities]
+    states = {str(entity["id"]): str(entity.get("state") or "").lower() for entity in entities}
+    if all(
+        entity_id in states and (states[entity_id] != "off") == expected_on
+        for entity_id in entity_ids
+    ):
+        return list(entity_ids)
     return None
 
 
@@ -2295,6 +2338,7 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         "experimental_history_enabled",
         "custom_appearance_enabled", "appearance_auto_accent", "appearance_auto_background",
         "appearance_device_colors_enabled", "appearance_compact",
+        "global_tab_navigation_enabled",
         "config_file_mode_enabled",
     }:
         if value_text.lower() not in {"on", "off"}:

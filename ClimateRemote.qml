@@ -13,8 +13,10 @@ Item {
   property color foreground: Color.foreground
   property color dim: Qt.darker(foreground, 1.55)
   property color accent: Color.accent
+  property color controlAccent: accent
   property color cardAccent: accent
   property color popupBackground: Color.popups.background
+  property color popupBorder: Color.popups.border
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
   property bool powerCancelEnabled: true
@@ -277,8 +279,8 @@ Item {
               value: root.activeMode
               foreground: root.foreground
               background: root.popupBackground
-              popupBorder: Color.popups.border
-              accent: root.accent
+              popupBorder: root.popupBorder
+              accent: root.controlAccent
               fontFamily: root.fontFamily
               controlRadius: root.panelRadius
               chromeLess: root.chromeLess
@@ -295,8 +297,8 @@ Item {
               value: root.activeFanMode
               foreground: root.foreground
               background: root.popupBackground
-              popupBorder: Color.popups.border
-              accent: root.accent
+              popupBorder: root.popupBorder
+              accent: root.controlAccent
               fontFamily: root.fontFamily
               controlRadius: root.panelRadius
               chromeLess: root.chromeLess

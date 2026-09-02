@@ -94,7 +94,8 @@ arguments or displayed in the bar.
   Experimental, keeping appearance controls together in their own settings
   section.
 
-Local history is recorded while this PC is available. The chart keeps up to
+Local history is recorded while this PC is available. The chart displays a
+rolling window ending now: selecting X H shows the past X hours. It keeps up to
 31 days. Long recordings are better suited to the external logger.
 
 ### Experimental
@@ -122,8 +123,13 @@ Local history is recorded while this PC is available. The chart keeps up to
   replaces the settings panes with a keyboard-first JSON editor under the
   **SETTINGS** title, where the mode can be disabled again. Press **Ctrl+S** or
   **Ctrl+Enter** to validate and save, **Ctrl+R** to reload, and use **Tab** or
-  **Shift+Tab** to move through the editor actions. The saved Home Assistant
-  connection URL and token are never included in the document.
+  **Shift+Tab** to move through the editor actions. Arrow keys, Page Up/Down,
+  the mouse wheel, and the editor scrollbar move through longer documents;
+  holding the cursor keys follows the document all the way to its top or
+  bottom. The saved Home Assistant connection URL and token are never included
+  in the document.
+- **Global Tab navigation** keeps Tab and Shift+Tab inside this panel and
+  moves through its controls instead of switching to another bar panel.
 - **Keyboard shortcuts** enables a dedicated **Shortcuts** section where each
   shortcut can be edited or disabled. **Reset shortcuts** restores the defaults.
 - With multiple ACs and **Globally synced controls** off, the power shortcut
@@ -164,6 +170,9 @@ separate field. Enter the Home Assistant URL as seen from that host, usually
 it verifies SSH and saves the pairing without copying files, sending the token,
 or reinstalling the timer. Choose **INSTALL / UPDATE TIMER** only for a
 first-time setup or when the remote logger configuration needs changing.
+If the chart says **EXTERNAL LOG STALE**, the remote timer is reachable but its
+Home Assistant token or logger setup needs updating; use **INSTALL / UPDATE
+TIMER** to refresh the server-side configuration.
 
 The installer is intentionally narrow: no sudo, package installation, open
 ports, telemetry, or Home Assistant control calls. It creates only the named

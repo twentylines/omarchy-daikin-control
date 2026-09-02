@@ -15,6 +15,7 @@ Item {
   property string valueText: "#8FA79F"
   property color foreground: Color.foreground
   property color accent: Color.accent
+  property color accentTextColor: Color.popups.background
   property string fontFamily: Style.font.family
   property var swatches: []
   property bool enabled: true
@@ -110,7 +111,7 @@ Item {
         text: "APPLY"
         fontSize: Style.font.caption
         fontFamily: root.fontFamily
-        foreground: Color.popups.background
+        foreground: root.accentTextColor
         accent: root.accent
         background: root.accent
         bordered: false

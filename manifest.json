@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sai.homeassistant-ac",
   "name": "Daikin AC Controls",
-  "version": "2.6.2",
+  "version": "0.3.0",
   "author": "Sai",
   "license": "MIT",
   "description": "Control a Home Assistant Daikin climate entity from Omarchy, with temperature, mode, fan, power, and history controls.",

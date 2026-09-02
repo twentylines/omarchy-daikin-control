@@ -223,6 +223,7 @@ class HelperTests(unittest.TestCase):
                 "history_remote_target": "sai@192.168.1.20",
                 "history_remote_port": 2222,
                 "history_remote_url": "http://127.0.0.1:8123",
+                "global_tab_navigation_enabled": True,
                 "history_remote_path": "~/.local/state/custom-ac.json",
             }
             helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -248,6 +249,7 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(saved["history_remote_target"], "sai@192.168.1.20")
                 self.assertEqual(saved["history_remote_port"], 2222)
                 self.assertEqual(saved["history_remote_path"], "~/.local/state/custom-ac.json")
+                self.assertTrue(saved["global_tab_navigation_enabled"])
             finally:
                 helper.CONFIG_PATH = original_path
                 helper.urlopen = original_urlopen
@@ -465,6 +467,7 @@ class HelperTests(unittest.TestCase):
     def test_keyboard_shortcuts_have_safe_defaults_and_normalize_keys(self):
         defaults = helper.experimental_settings({})
         self.assertFalse(defaults["shortcuts_enabled"])
+        self.assertFalse(defaults["global_tab_navigation_enabled"])
         self.assertEqual(defaults["shortcuts"]["open_panel"]["key"], "SUPER+ALT+A")
         self.assertEqual(
             helper.normalize_shortcut("shift + alt + ctrl + escape"),
@@ -677,6 +680,7 @@ class HelperTests(unittest.TestCase):
                 "advanced_controls": False,
                 "appearance_background": "#202426",
                 "appearance_compact": True,
+                "global_tab_navigation_enabled": True,
                 "config_file_mode_enabled": True,
             }) + "\n"
             try:
@@ -694,6 +698,7 @@ class HelperTests(unittest.TestCase):
                 self.assertFalse(saved["advanced_controls"])
                 self.assertEqual(saved["appearance_background"], "#202426")
                 self.assertTrue(saved["appearance_compact"])
+                self.assertTrue(saved["global_tab_navigation_enabled"])
                 self.assertTrue(saved["config_file_mode_enabled"])
             finally:
                 helper.CONFIG_PATH = original_path
@@ -1199,6 +1204,24 @@ class HelperTests(unittest.TestCase):
         self.assertIn('visible: !root.configFileModeEnabled\n              width: parent.width\n              label: "Config file mode"', panel)
         self.assertIn('id: configFileCard', panel)
         self.assertIn('id: configFileEditor', panel)
+        self.assertIn('id: configFileEditorScroll', panel)
+        self.assertIn('flickableDirection: Flickable.VerticalFlick', panel)
+        self.assertIn('policy: ScrollBar.AlwaysOn', panel)
+        self.assertIn('id: configFileWheelHandler', panel)
+        self.assertIn('function scrollConfigFileBy(delta)', panel)
+        self.assertIn('function ensureConfigFileCursorVisible()', panel)
+        self.assertIn('configFileEditor.mapToItem(', panel)
+        self.assertIn('var atDocumentEnd = configFileEditor.cursorPosition >= textLength', panel)
+        self.assertIn('configFileEditorScroll.contentY = Math.max(0, Math.min(maxY, nextY))', panel)
+        self.assertIn('id: configFileCursorVisibilityTimer', panel)
+        self.assertIn('root.ensureConfigFileCursorVisible()\n                  Qt.callLater(root.ensureConfigFileCursorVisible)', panel)
+        self.assertIn('function focusConfigFileEditor()', panel)
+        self.assertIn('configFileEditor.forceActiveFocus()', panel)
+        self.assertIn('Qt.callLater(root.focusConfigFileEditor)', panel)
+        self.assertIn('onVisibleChanged: if (visible) root.scheduleConfigFileRefresh()', panel)
+        self.assertIn('shortcutDisplay(root.shortcutValue("open_settings"))', panel)
+        self.assertIn('label: "Global Tab navigation"', panel)
+        self.assertIn('global_tab_navigation_enabled', panel)
         self.assertIn('|| root.configFileModeEnabled', panel)
         self.assertIn('function reloadConfigFile()', panel)
         self.assertIn('function configFileBackwardTab(event)', panel)
@@ -1215,6 +1238,10 @@ class HelperTests(unittest.TestCase):
         self.assertIn("appearance_compact", panel)
         self.assertIn('label: "Auto · Omarchy accent"', panel)
         self.assertIn('"RESET CUSTOMISATIONS"', panel)
+        self.assertIn('function historyTimestamp(value)', panel)
+        self.assertIn('readonly property real historyLatestTimestamp', panel)
+        self.assertIn('readonly property bool historyLogStale', panel)
+        self.assertIn('EXTERNAL LOG STALE · UPDATE TIMER', panel)
         self.assertIn('label: "SWITCH & SLIDER COLOUR"', panel)
         self.assertIn('label: "Per-device colours"', panel)
         self.assertIn("AppearanceColorRow", panel)
@@ -1240,6 +1267,21 @@ class HelperTests(unittest.TestCase):
         self.assertIn("width: root.showLiveIndicator ? Style.space(8) : 0", chart)
         self.assertIn("spacing: root.showLiveIndicator ? Style.space(5) : 0", chart)
         self.assertIn("showLiveIndicator: root.historySource === \"server\"", panel)
+        self.assertIn("windowEndTimestamp: root.historyWindowEnd", panel)
+        self.assertIn('text: "ROLLING WINDOW · PAST " + root.formatHours(root.historyHours)', panel)
+        self.assertIn('text: root.formatHours(root.rangeHours) + " H"', chart)
+        self.assertIn("interval: 1000", panel)
+        self.assertIn("onHistoryHoursChanged: historyWindowRevision += 1", panel)
+        self.assertIn("onHistoryChartVisibleChanged: if (historyChartVisible) historyWindowRevision += 1", panel)
+        self.assertIn("ending now", panel)
+        self.assertIn("property real windowEndTimestamp: 0", chart)
+        self.assertIn("root.windowEndTimestamp > 0", chart)
+
+    def test_plugin_version_is_0_3_0_and_settings_title_is_not_repeated(self):
+        manifest = json.loads((HELPER.parent / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["version"], "0.3.0")
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertNotIn('text: "SETTINGS"\n              color: root.dim', panel)
 
     def test_remote_history_path_is_written_to_the_logger_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1352,7 +1394,7 @@ class HelperTests(unittest.TestCase):
         finally:
             helper.urlopen = original_urlopen
 
-    def test_turn_off_all_targets_every_available_climate_entity(self):
+    def test_turn_off_all_targets_only_available_entities_that_were_on(self):
         original_urlopen = helper.urlopen
         requests = []
         states = [
@@ -1386,20 +1428,21 @@ class HelperTests(unittest.TestCase):
                 result = helper.turn_off_all("http://ha.local:8123", "secret")
             self.assertEqual(result, 0)
             parsed = json.loads(output.getvalue())
-            self.assertEqual(parsed["count"], 2)
-            self.assertEqual(parsed["turned_off"], ["climate.bedroom", "climate.living_room"])
+            self.assertEqual(parsed["count"], 1)
+            self.assertEqual(parsed["turned_off"], ["climate.bedroom"])
+            self.assertEqual(parsed["previously_on"], ["climate.bedroom"])
             self.assertEqual(
                 requests[-1][0],
                 "http://ha.local:8123/api/services/climate/turn_off",
             )
             self.assertEqual(
                 requests[-1][1]["entity_id"],
-                ["climate.bedroom", "climate.living_room"],
+                ["climate.bedroom"],
             )
         finally:
             helper.urlopen = original_urlopen
 
-    def test_turn_on_all_targets_every_available_climate_entity(self):
+    def test_turn_on_all_targets_only_available_entities_that_were_off(self):
         original_urlopen = helper.urlopen
         requests = []
         states = [
@@ -1433,15 +1476,16 @@ class HelperTests(unittest.TestCase):
                 result = helper.turn_on_all("http://ha.local:8123", "secret")
             self.assertEqual(result, 0)
             parsed = json.loads(output.getvalue())
-            self.assertEqual(parsed["count"], 2)
-            self.assertEqual(parsed["turned_on"], ["climate.bedroom", "climate.living_room"])
+            self.assertEqual(parsed["count"], 1)
+            self.assertEqual(parsed["turned_on"], ["climate.bedroom"])
+            self.assertEqual(parsed["previously_off"], ["climate.bedroom"])
             self.assertEqual(
                 requests[-1][0],
                 "http://ha.local:8123/api/services/climate/turn_on",
             )
             self.assertEqual(
                 requests[-1][1]["entity_id"],
-                ["climate.bedroom", "climate.living_room"],
+                ["climate.bedroom"],
             )
         finally:
             helper.urlopen = original_urlopen
@@ -1449,7 +1493,51 @@ class HelperTests(unittest.TestCase):
     def test_turn_off_all_reports_verified_success_after_transport_timeout(self):
         original_urlopen = helper.urlopen
         requests = []
-        off_states = [
+        states_before = [
+            {
+                "entity_id": "climate.bedroom",
+                "state": "off",
+                "attributes": {"friendly_name": "Bedroom"},
+            },
+            {
+                "entity_id": "climate.living_room",
+                "state": "cool",
+                "attributes": {"friendly_name": "Living room"},
+            },
+        ]
+        states_after = [
+            {**states_before[0]},
+            {**states_before[1], "state": "off"},
+        ]
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, request.method))
+            if request.method == "GET":
+                return FakeResponse(states_before if len(requests) == 1 else states_after)
+            raise helper.HomeAssistantError(
+                "Home Assistant request timed out at http://ha.local:8123"
+            )
+
+        helper.urlopen = fake_urlopen
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = helper.turn_off_all("http://ha.local:8123", "secret")
+            self.assertEqual(result, 0)
+            parsed = json.loads(output.getvalue())
+            self.assertTrue(parsed["ok"])
+            self.assertTrue(parsed["verified"])
+            self.assertEqual(parsed["turned_off"], ["climate.living_room"])
+            self.assertEqual(parsed["previously_on"], ["climate.living_room"])
+            self.assertIn("reports the targeted climate devices off", parsed["message"])
+            self.assertEqual(requests[-1][1], "GET")
+        finally:
+            helper.urlopen = original_urlopen
+
+    def test_turn_off_all_is_a_noop_when_every_available_entity_is_off(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        states = [
             {
                 "entity_id": "climate.bedroom",
                 "state": "off",
@@ -1464,11 +1552,7 @@ class HelperTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout):
             requests.append((request.full_url, request.method))
-            if request.method == "GET":
-                return FakeResponse(off_states)
-            raise helper.HomeAssistantError(
-                "Home Assistant request timed out at http://ha.local:8123"
-            )
+            return FakeResponse(states)
 
         helper.urlopen = fake_urlopen
         try:
@@ -1478,13 +1562,89 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(result, 0)
             parsed = json.loads(output.getvalue())
             self.assertTrue(parsed["ok"])
+            self.assertEqual(parsed["count"], 0)
+            self.assertEqual(parsed["turned_off"], [])
+            self.assertIn("already off", parsed["message"])
+            self.assertEqual(requests, [("http://ha.local:8123/api/states", "GET")])
+        finally:
+            helper.urlopen = original_urlopen
+
+    def test_turn_on_all_reports_verified_success_after_transport_timeout(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        states_before = [
+            {
+                "entity_id": "climate.bedroom",
+                "state": "off",
+                "attributes": {"friendly_name": "Bedroom"},
+            },
+            {
+                "entity_id": "climate.living_room",
+                "state": "cool",
+                "attributes": {"friendly_name": "Living room"},
+            },
+        ]
+        states_after = [
+            {**states_before[0], "state": "cool"},
+            {**states_before[1]},
+        ]
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, request.method))
+            if request.method == "GET":
+                return FakeResponse(states_before if len(requests) == 1 else states_after)
+            raise helper.HomeAssistantError(
+                "Home Assistant request timed out at http://ha.local:8123"
+            )
+
+        helper.urlopen = fake_urlopen
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = helper.turn_on_all("http://ha.local:8123", "secret")
+            self.assertEqual(result, 0)
+            parsed = json.loads(output.getvalue())
+            self.assertTrue(parsed["ok"])
             self.assertTrue(parsed["verified"])
-            self.assertEqual(parsed["turned_off"], [
-                "climate.bedroom",
-                "climate.living_room",
-            ])
-            self.assertIn("reports every climate device off", parsed["message"])
+            self.assertEqual(parsed["turned_on"], ["climate.bedroom"])
+            self.assertEqual(parsed["previously_off"], ["climate.bedroom"])
+            self.assertIn("reports the targeted climate devices on", parsed["message"])
             self.assertEqual(requests[-1][1], "GET")
+        finally:
+            helper.urlopen = original_urlopen
+
+    def test_turn_on_all_is_a_noop_when_every_available_entity_is_on(self):
+        original_urlopen = helper.urlopen
+        requests = []
+        states = [
+            {
+                "entity_id": "climate.bedroom",
+                "state": "cool",
+                "attributes": {"friendly_name": "Bedroom"},
+            },
+            {
+                "entity_id": "climate.living_room",
+                "state": "heat",
+                "attributes": {"friendly_name": "Living room"},
+            },
+        ]
+
+        def fake_urlopen(request, timeout):
+            requests.append((request.full_url, request.method))
+            return FakeResponse(states)
+
+        helper.urlopen = fake_urlopen
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = helper.turn_on_all("http://ha.local:8123", "secret")
+            self.assertEqual(result, 0)
+            parsed = json.loads(output.getvalue())
+            self.assertTrue(parsed["ok"])
+            self.assertEqual(parsed["count"], 0)
+            self.assertEqual(parsed["turned_on"], [])
+            self.assertIn("already on", parsed["message"])
+            self.assertEqual(requests, [("http://ha.local:8123/api/states", "GET")])
         finally:
             helper.urlopen = original_urlopen
 

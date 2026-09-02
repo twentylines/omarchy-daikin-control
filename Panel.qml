@@ -75,12 +75,16 @@ Panel {
   ]
   property bool shortcutsEnabled: false
   property bool shortcutsEnabledPrevious: false
+  property bool globalTabNavigationEnabled: false
+  property bool globalTabNavigationEnabledPrevious: false
+  property var globalTabFocusOverrides: []
   property bool configFileModeEnabled: false
   property bool configFileModeEnabledPrevious: false
   property string configFileText: ""
   property string configFilePayload: ""
   property string configFileStatus: ""
   property string configFileError: ""
+  property bool configFileEditorSyncing: false
   property bool configFileBusy: false
   property var shortcutValues: ({
     open_panel: { key: "SUPER+ALT+A", enabled: true },
@@ -129,13 +133,16 @@ Panel {
   property bool compactUiEnabledPrevious: false
   readonly property color accentColor: customAppearanceEnabled && !appearanceAutoAccent
     ? customAccentColor : Color.accent
-  // The control colour drives switches, sliders, selected states, and hover
-  // feedback. It falls back to Omarchy whenever custom appearance is inactive.
+  // The control colour drives switches, sliders, fields, and dropdowns. Action
+  // buttons and card accents use accentColor. It falls back to Omarchy whenever
+  // custom appearance is inactive.
   readonly property color interactionAccentColor: customAppearanceEnabled && !appearanceAutoAccent
     ? customControlColor : Color.accent
   readonly property color controlAccentColor: interactionAccentColor
   readonly property color appearanceBackgroundColor: customAppearanceEnabled && !appearanceAutoBackground
     ? customBackgroundColor : Color.popups.background
+  readonly property color appearancePopupBorderColor: customAppearanceEnabled
+    ? root.alpha(root.controlAccentColor, 0.52) : Color.popups.border
   readonly property real appearanceSurfaceOpacity: customAppearanceEnabled
     ? Math.max(0, 1 - appearanceTransparency / 100) : 1
   readonly property real appearanceSoftness: customAppearanceEnabled
@@ -243,6 +250,7 @@ Panel {
   property bool historyCustom: false
   property bool historyCustomPrevious: false
   property string customHistoryHoursText: "24"
+  property int historyWindowRevision: 0
   property string historySource: "local"
   property string historySourcePrevious: "local"
   property string remoteHistoryTarget: ""
@@ -407,6 +415,7 @@ Panel {
         ? barTemperatureEntities.slice() : [],
       experimental_history_enabled: experimentalHistoryEnabled,
       shortcuts_enabled: shortcutsEnabled,
+      global_tab_navigation_enabled: globalTabNavigationEnabled,
       config_file_mode_enabled: configFileModeEnabled,
       shortcuts: root.copyShortcutValues(),
       custom_appearance_enabled: customAppearanceEnabled,
@@ -425,8 +434,36 @@ Panel {
   }
 
   function refreshConfigFileText() {
-    configFileText = JSON.stringify(root.configFileDocument(), null, 2)
-    if (configFileEditor) configFileEditor.text = configFileText
+    var next = JSON.stringify(root.configFileDocument(), null, 2)
+    // TextArea removes its text binding after a user edit. Keep the model and
+    // editor synchronized during an explicit reload without treating that
+    // programmatic assignment as a new edit.
+    configFileEditorSyncing = true
+    configFileText = next
+    if (configFileEditor) configFileEditor.text = next
+    configFileEditorSyncing = false
+  }
+
+  function scheduleConfigFileRefresh() {
+    if (configFileRefreshTimer) configFileRefreshTimer.restart()
+  }
+
+  function focusConfigFileEditor() {
+    if (!root.setupOpen || !root.configFileModeEnabled || !configFileEditor) return
+    // Config File Mode is deliberately keyboard-first. When the preference is
+    // already enabled before Settings opens, the editor has not necessarily
+    // received focus yet, so its TextArea can still be holding its initial
+    // empty binding. Refresh before focusing and once after the focus change
+    // has completed to make the initial document deterministic.
+    if (String(configFileEditor.text || "").trim() === "")
+      root.refreshConfigFileText()
+    configFileEditor.forceActiveFocus()
+    Qt.callLater(function() {
+      if (!root.setupOpen || !root.configFileModeEnabled || !configFileEditor) return
+      if (String(configFileEditor.text || "").trim() === "")
+        root.refreshConfigFileText()
+      root.ensureConfigFileCursorVisible()
+    })
   }
 
   function reloadConfigFile() {
@@ -440,6 +477,154 @@ Panel {
     return event.key === Qt.Key_Backtab
       || (event.key === Qt.Key_Tab
         && (event.modifiers & Qt.ShiftModifier) !== 0)
+  }
+
+  // The shell's default Tab action moves between panel popouts. When this
+  // experimental option is enabled, make the panel's ordinary buttons join
+  // the same focus chain as text fields, toggles, and dropdown triggers.
+  function applyGlobalTabNavigation() {
+    var overrides = root.globalTabFocusOverrides || []
+    if (!root.globalTabNavigationEnabled) {
+      for (var i = 0; i < overrides.length; i++) {
+        if (overrides[i].item) overrides[i].item.focusable = overrides[i].value
+      }
+      root.globalTabFocusOverrides = []
+      return
+    }
+
+    function visit(item) {
+      if (!item) return
+      if (item !== keyCatcher && item.focusable === false) {
+        var alreadySaved = false
+        for (var i = 0; i < overrides.length; i++) {
+          if (overrides[i].item === item) {
+            alreadySaved = true
+            break
+          }
+        }
+        if (!alreadySaved) {
+          overrides.push({ item: item, value: item.focusable })
+          item.focusable = true
+        }
+      }
+      var children = item.children || []
+      for (var j = 0; j < children.length; j++) visit(children[j])
+    }
+
+    visit(keyCatcher)
+    root.globalTabFocusOverrides = overrides
+  }
+
+  function globalTabFocusItems() {
+    root.applyGlobalTabNavigation()
+    var result = []
+
+    function isUsable(item) {
+      var current = item
+      while (current && current !== panel) {
+        if (!current.visible || current.opacity <= 0.01
+            || current.width <= 0 || current.height <= 0)
+          return false
+        current = current.parent
+      }
+      return true
+    }
+
+    function visit(item) {
+      if (!item) return
+      if (item !== keyCatcher && isUsable(item) && item.enabled && item.activeFocusOnTab)
+        result.push(item)
+      var children = item.children || []
+      for (var i = 0; i < children.length; i++) visit(children[i])
+    }
+
+    visit(keyCatcher)
+    return result
+  }
+
+  function ensurePanelFocusVisible(item) {
+    if (!item || !panelScroll || panelScroll.contentHeight <= panelScroll.height) return
+    var point = item.mapToItem(panelScroll.contentItem, 0, 0)
+    var top = point.y
+    var bottom = top + Math.max(1, item.height)
+    var margin = Style.space(8)
+    var maxY = Math.max(0, panelScroll.contentHeight - panelScroll.height)
+    if (top < panelScroll.contentY + margin)
+      panelScroll.contentY = Math.max(0, top - margin)
+    else if (bottom > panelScroll.contentY + panelScroll.height - margin)
+      panelScroll.contentY = Math.min(maxY, bottom + margin - panelScroll.height)
+  }
+
+  function focusNextPanelItem(direction) {
+    if (!root.globalTabNavigationEnabled) return false
+    var items = root.globalTabFocusItems()
+    if (items.length === 0) return false
+    var current = panel.activeFocusItem
+    var index = items.indexOf(current)
+    while (index < 0 && current) {
+      current = current.parent
+      index = items.indexOf(current)
+    }
+    var step = Number(direction) < 0 ? -1 : 1
+    if (index < 0) index = step > 0 ? -1 : 0
+    var next = items[(index + step + items.length) % items.length]
+    next.forceActiveFocus()
+    Qt.callLater(function() { root.ensurePanelFocusVisible(next) })
+    return true
+  }
+
+  function historyTimestamp(value) {
+    var timestamp = Number(value)
+    if (!isFinite(timestamp)) return 0
+    // Older external loggers may have written Unix time in milliseconds.
+    return timestamp > 100000000000 ? timestamp / 1000 : timestamp
+  }
+
+  function ensureConfigFileCursorVisible() {
+    if (!configFileEditor || !configFileEditorScroll) return
+    var cursor = configFileEditor.cursorRectangle
+    // cursorRectangle is local to the TextArea. Mapping both edges into the
+    // Flickable content item keeps this correct if the control's internal
+    // padding/content item changes between Qt versions.
+    var cursorTop = configFileEditor.mapToItem(
+      configFileEditorScroll.contentItem, cursor.x, cursor.y)
+    var cursorBottom = configFileEditor.mapToItem(
+      configFileEditorScroll.contentItem, cursor.x,
+      cursor.y + Math.max(1, cursor.height))
+    var top = cursorTop.y
+    var bottom = Math.max(top + 1, cursorBottom.y)
+    var margin = Style.space(8)
+    var maxY = Math.max(0, configFileEditorScroll.contentHeight
+      - configFileEditorScroll.height)
+    var nextY = configFileEditorScroll.contentY
+    var textLength = String(configFileEditor.text || "").length
+    var atDocumentStart = configFileEditor.cursorPosition <= 0
+    var atDocumentEnd = configFileEditor.cursorPosition >= textLength
+    var documentBottom = Math.max(0, configFileEditorScroll.contentHeight
+      - configFileEditor.bottomPadding)
+
+    // Reaching either end should land exactly on the corresponding corner of
+    // the editor. This matters for key-repeat: the cursor can arrive at the
+    // last visual line without landing at the final character.
+    if (atDocumentStart)
+      nextY = 0
+    else if (atDocumentEnd || bottom >= documentBottom - margin)
+      nextY = maxY
+    else if (top < configFileEditorScroll.contentY + margin)
+      nextY = top - margin
+    else if (bottom > configFileEditorScroll.contentY
+        + configFileEditorScroll.height - margin)
+      nextY = bottom + margin - configFileEditorScroll.height
+
+    configFileEditorScroll.contentY = Math.max(0, Math.min(maxY, nextY))
+  }
+
+  function scrollConfigFileBy(delta) {
+    if (!configFileEditorScroll) return
+    var maxY = Math.max(0, configFileEditorScroll.contentHeight
+      - configFileEditorScroll.height)
+    configFileEditorScroll.contentY = Math.max(0, Math.min(maxY,
+      configFileEditorScroll.contentY + Number(delta || 0)))
   }
 
   function applyConfigFileState(parsed) {
@@ -504,6 +689,10 @@ Panel {
         configFileStatus = ""
         return
       }
+      // The helper receives one stdin line. Keep the editor pretty-printed
+      // for humans, but send a compact equivalent so multiline JSON is not
+      // truncated at the first newline.
+      configFilePayload = JSON.stringify(payload)
     } catch (error) {
       configFileError = "Fix the JSON syntax before applying the config file."
       configFileStatus = ""
@@ -511,7 +700,6 @@ Panel {
     }
     configFileError = ""
     configFileStatus = "Saving preferences…"
-    configFilePayload = text
     configFileBusy = true
     configFileProcess.command = ["python3", root.helperPath, "set-config-file"]
     configFileProcess.running = true
@@ -531,7 +719,7 @@ Panel {
         configFileError = ""
         configFileStatus = parsed.shortcut_sync_error
           ? "Saved, but keyboard bindings need attention."
-          : "Saved. Ctrl+S or Ctrl+Enter applies the JSON; use the SETTINGS toggle to exit."
+          : "Saved. Ctrl+S or Ctrl+Enter applies the JSON; Esc returns to AC controls."
         root.refreshConfigFileText()
         Qt.callLater(function() {
           root.refresh()
@@ -934,6 +1122,10 @@ Panel {
   readonly property bool hasLocalTarget: localTarget !== null && isFinite(Number(localTarget))
   readonly property var targetValue: hasLocalTarget ? Number(localTarget) : reading.target
   readonly property string targetText: connected ? temperature(targetValue) : "..."
+  readonly property real historyWindowEnd: {
+    var revision = root.historyWindowRevision
+    return Date.now() / 1000
+  }
   readonly property bool masterSwitchBusy: turnOffAllBusy || turnOnAllBusy
   readonly property bool masterSwitchConfirming: turnOffAllConfirming || turnOnAllConfirming
   readonly property bool otherActionBusy: masterSwitchBusy
@@ -957,13 +1149,14 @@ Panel {
   readonly property var historyPoints: {
     var next = []
     if (!connected || !Array.isArray(reading.history)) return next
-    var cutoff = Date.now() / 1000 - Number(historyHours) * 60 * 60
+    var cutoff = root.historyWindowEnd - Number(historyHours) * 60 * 60
     for (var i = 0; i < reading.history.length; i++) {
       var item = reading.history[i]
       if (!item || !isFinite(Number(item.timestamp)) || !isFinite(Number(item.temperature))) continue
-      if (Number(item.timestamp) >= cutoff) {
+      var timestamp = root.historyTimestamp(item.timestamp)
+      if (timestamp >= cutoff && timestamp <= root.historyWindowEnd + 300) {
         next.push({
-          timestamp: Number(item.timestamp),
+          timestamp: timestamp,
           temperature: root.convertTemperature(
             Number(item.temperature), String(item.unit || unit), displayTemperatureUnitCode),
           unit: displayTemperatureUnit,
@@ -982,12 +1175,37 @@ Panel {
   }
   readonly property string historySourceLabel: historySource === "server"
     ? "EXTERNAL · " + historyServerLabel : "LOCAL · LOGGED WHILE PC IS ON"
+  readonly property bool historyLogHasSamples: {
+    if (!Array.isArray(reading.history)) return false
+    for (var i = 0; i < reading.history.length; i++) {
+      var item = reading.history[i]
+      if (item && isFinite(Number(item.timestamp)) && isFinite(Number(item.temperature)))
+        return true
+    }
+    return false
+  }
+  readonly property real historyLatestTimestamp: {
+    var latest = 0
+    if (!Array.isArray(reading.history)) return latest
+    for (var i = 0; i < reading.history.length; i++) {
+      var item = reading.history[i]
+      if (!item || !isFinite(Number(item.timestamp))) continue
+      latest = Math.max(latest, root.historyTimestamp(item.timestamp))
+    }
+    return latest
+  }
+  readonly property bool historyLogStale: historySource === "server"
+    && historyLogHasSamples && historyPoints.length === 0
+    && historyLatestTimestamp > 0
+    && historyWindowEnd - historyLatestTimestamp > Number(historyHours) * 60 * 60
   readonly property real homeAssistantPingMs: {
     var value = Number(reading.ping_ms)
     return isFinite(value) && value >= 0 ? value : -1
   }
   readonly property string historyEmptyMessage: historySource === "server"
-    ? (String(reading.history_error || "") !== "" ? "EXTERNAL LOG UNAVAILABLE" : "WAITING FOR EXTERNAL LOG…")
+    ? (String(reading.history_error || "") !== "" ? "EXTERNAL LOG UNAVAILABLE"
+      : historyLogStale ? "EXTERNAL LOG STALE · UPDATE TIMER"
+      : historyLogHasSamples ? "NO READINGS IN SELECTED RANGE" : "WAITING FOR EXTERNAL LOG…")
     : "WAITING FOR LOCAL READINGS…"
   readonly property bool localHomeAssistantConfigured: root.isLocalHomeAssistantUrl(activeHomeAssistantUrl)
   readonly property bool localHomeAssistantConnected: localHomeAssistantConfigured && connected
@@ -1633,6 +1851,8 @@ Panel {
     experimentalHistoryEnabledPrevious = experimentalHistoryEnabled
     shortcutsEnabled = parsed.shortcuts_enabled === true
     shortcutsEnabledPrevious = shortcutsEnabled
+    globalTabNavigationEnabled = parsed.global_tab_navigation_enabled === true
+    globalTabNavigationEnabledPrevious = globalTabNavigationEnabled
     configFileModeEnabled = parsed.config_file_mode_enabled === true
     configFileModeEnabledPrevious = configFileModeEnabled
     shortcutValues = normalizeShortcutValues(parsed.shortcuts)
@@ -1719,7 +1939,7 @@ Panel {
 
   function openSettingsFromShortcut() {
     root.controller.show()
-    root.loadConfig()
+    root.loadConfig(true)
     root.refresh()
     Qt.callLater(function() {
       if (!root.setupOpen) root.openSetup()
@@ -1728,7 +1948,7 @@ Panel {
 
   function navigateSettingsFromShortcut(direction) {
     root.controller.show()
-    root.loadConfig()
+    root.loadConfig(true)
     root.refresh()
     Qt.callLater(function() {
       if (!root.configured) return
@@ -1763,7 +1983,8 @@ Panel {
     return true
   }
 
-  function loadConfig() {
+  function loadConfig(force) {
+    if (force === true && !configProcess.running) configResolved = false
     if (configResolved || configProcess.running) return
     configProcess.command = ["python3", root.helperPath, "config"]
     configProcess.running = true
@@ -1808,6 +2029,8 @@ Panel {
       setupOpen = true
       Qt.callLater(function() { setupUrlField.forceActiveFocus() })
     }
+    if (root.configFileModeEnabled)
+      root.scheduleConfigFileRefresh()
   }
 
   function cancelSetup() {
@@ -2460,6 +2683,8 @@ Panel {
         experimentalHistoryEnabledPrevious = false
         shortcutsEnabled = false
         shortcutsEnabledPrevious = false
+        globalTabNavigationEnabled = false
+        globalTabNavigationEnabledPrevious = false
         configFileModeEnabled = false
         configFileModeEnabledPrevious = false
         configFileText = ""
@@ -2567,6 +2792,8 @@ Panel {
         setupSelectedEntity = selectedEntity
       }
       root.applyExperimentalValues(parsed)
+      if (root.configFileModeEnabled)
+        root.scheduleConfigFileRefresh()
       if (!configured) {
         setupOpen = true
         setupError = ""
@@ -2611,6 +2838,8 @@ Panel {
         }
         if (parsed.entities) setEntityOptions(parsed.entities)
         root.applyExperimentalValues(parsed)
+        if (root.configFileModeEnabled)
+          root.scheduleConfigFileRefresh()
         if (parsed.advanced_controls !== undefined) {
           showClimateControls = parsed.advanced_controls === true
           showClimateControlsPrevious = showClimateControls
@@ -3256,6 +3485,16 @@ Panel {
     root.beginPreference("shortcuts_enabled", next ? "on" : "off")
   }
 
+  function setGlobalTabNavigationEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === root.globalTabNavigationEnabled) return
+    globalTabNavigationEnabledPrevious = root.globalTabNavigationEnabled
+    globalTabNavigationEnabled = next
+    root.applyGlobalTabNavigation()
+    root.beginPreference("global_tab_navigation_enabled", next ? "on" : "off")
+  }
+
   function setConfigFileModeEnabled(value) {
     if (preferenceProcess.running || configFileBusy) return
     var next = value === true
@@ -3514,6 +3753,10 @@ Panel {
     else if (kind === "experimental_history_enabled")
       experimentalHistoryEnabled = experimentalHistoryEnabledPrevious
     else if (kind === "shortcuts_enabled") shortcutsEnabled = shortcutsEnabledPrevious
+    else if (kind === "global_tab_navigation_enabled") {
+      globalTabNavigationEnabled = globalTabNavigationEnabledPrevious
+      root.applyGlobalTabNavigation()
+    }
     else if (kind === "config_file_mode_enabled")
       configFileModeEnabled = configFileModeEnabledPrevious
     else if (kind === "reset_shortcuts")
@@ -3582,6 +3825,10 @@ Panel {
     } else if (name === "shortcuts_enabled") {
       shortcutsEnabled = value === true
       shortcutsEnabledPrevious = shortcutsEnabled
+    } else if (name === "global_tab_navigation_enabled") {
+      globalTabNavigationEnabled = value === true
+      globalTabNavigationEnabledPrevious = globalTabNavigationEnabled
+      root.applyGlobalTabNavigation()
     } else if (name === "config_file_mode_enabled") {
       configFileModeEnabled = value === true
       configFileModeEnabledPrevious = configFileModeEnabled
@@ -3925,7 +4172,8 @@ Panel {
       var completedPreference = root.preferenceKind
       root.preferenceBusy = false
       root.preferenceKind = ""
-      if (completedPreference === "history_source") Qt.callLater(root.refresh)
+      if (completedPreference === "history_source"
+          || completedPreference === "history_range") Qt.callLater(root.refresh)
     }
   }
 
@@ -4287,9 +4535,26 @@ Panel {
     onTriggered: root.refresh()
   }
 
+  Timer {
+    // Keep the chart's right edge anchored to the current time while the
+    // selected range remains the exact rolling window shown to the user.
+    interval: 1000
+    running: root.historyChartVisible
+    repeat: true
+    onTriggered: root.historyWindowRevision += 1
+  }
+
+  Timer {
+    id: configFileRefreshTimer
+    interval: 1
+    repeat: false
+    onTriggered: if (root.configFileModeEnabled) root.refreshConfigFileText()
+  }
+
   onOpenedChanged: {
     if (opened) {
       root.refresh()
+      Qt.callLater(root.applyGlobalTabNavigation)
     } else {
       setupTransitionTimer.stop()
       setupTransitionFinishTimer.stop()
@@ -4304,6 +4569,26 @@ Panel {
     }
   }
 
+  onGlobalTabNavigationEnabledChanged: Qt.callLater(root.applyGlobalTabNavigation)
+  onHistoryHoursChanged: historyWindowRevision += 1
+  onHistoryChartVisibleChanged: if (historyChartVisible) historyWindowRevision += 1
+  onUnitReadingsChanged: Qt.callLater(root.applyGlobalTabNavigation)
+  onSelectedEntitiesChanged: Qt.callLater(root.applyGlobalTabNavigation)
+  onConfigFileModeEnabledChanged: {
+    Qt.callLater(root.applyGlobalTabNavigation)
+    if (root.configFileModeEnabled) {
+      root.scheduleConfigFileRefresh()
+      Qt.callLater(root.focusConfigFileEditor)
+    }
+  }
+
+  onSetupOpenChanged: {
+    if (root.setupOpen && root.configFileModeEnabled) {
+      root.scheduleConfigFileRefresh()
+      Qt.callLater(root.focusConfigFileEditor)
+    }
+  }
+
   onSettingsSectionChanged: {
     if (settingsSection === "shortcuts" && !shortcutsEnabled)
       settingsSection = "experimental"
@@ -4314,6 +4599,7 @@ Panel {
     if (settingsSection !== "maintenance") localServerExpanded = false
     if (settingsSection !== "setup" && remoteHistoryReconfiguring
         && !remoteHistoryBusy) root.cancelRemoteHistoryReconfigure()
+    Qt.callLater(root.applyGlobalTabNavigation)
   }
 
   GlobalShortcut {
@@ -4453,7 +4739,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function settings(): void {
       root.controller.show()
-      root.loadConfig()
+      root.loadConfig(true)
       root.refresh()
       Qt.callLater(root.openSetup)
     }
@@ -4479,6 +4765,25 @@ Panel {
       NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
     }
 
+    // KeyboardPanel keeps its stock card just outside this content item. Pull
+    // the customised surface back over that inset so the card border and the
+    // surrounding outer layer use the same background as the plugin surface.
+    BorderSurface {
+      id: outerPanelSurface
+      visible: root.customAppearanceEnabled
+      anchors.fill: parent
+      anchors.leftMargin: -(panel.padding + Border.left(panel.borderSpec))
+      anchors.rightMargin: -(panel.padding + Border.right(panel.borderSpec))
+      anchors.topMargin: -(panel.padding + Border.top(panel.borderSpec))
+      anchors.bottomMargin: -(panel.padding + Border.bottom(panel.borderSpec))
+      z: -3
+      radius: root.panelRadius
+      color: root.panelSurface
+      borderSpec: root.compactChromeEnabled
+        ? Border.none()
+        : Border.flat(root.alpha(root.accentColor, 0.30), 1)
+    }
+
     // Keep the panel readable over bright windows. The stock popup surface
     // can inherit a translucent theme alpha, so the plugin adds an opaque
     // surface behind its own content without changing the user's theme.
@@ -4501,14 +4806,15 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.setupOpen && (setupUrlField.activeFocus
+      blocked: (root.setupOpen && (setupUrlField.activeFocus
         || setupTokenField.activeFocus || reconnectUrlField.activeFocus
         || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
         || reconnectEntityDropdown.popupOpen
         || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
         || remoteHistoryUrlField.activeFocus || root.configFileModeEnabled
-        || configFileEditor.activeFocus
-        || root.shortcutCaptureActive)
+        || configFileEditor.activeFocus || root.shortcutCaptureActive))
+        || (root.globalTabNavigationEnabled && panel.activeFocusItem
+          && panel.activeFocusItem !== keyCatcher)
       onCloseRequested: {
         if (root.setupOpen && root.configured) {
           if (!root.shortcutsEnabled || root.shortcutEnabled("settings_back")) root.cancelSetup()
@@ -4518,7 +4824,10 @@ Panel {
         }
       }
       onActivateRequested: root.refresh()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTabRequested: function(direction) {
+        if (root.globalTabNavigationEnabled) root.focusNextPanelItem(direction)
+        else root.switchPanel(direction)
+      }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
         else if (t === "-" || t === "_") root.adjustTarget(-1)
@@ -4538,6 +4847,15 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
+
+        Keys.priority: Keys.AfterItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) {
+            event.accepted = true
+            if (root.setupOpen && root.configured) root.cancelSetup()
+            else root.close()
+          }
+        }
 
         Connections {
           target: root
@@ -4618,7 +4936,7 @@ Panel {
                 && !root.uninstallBusy && !root.uninstallConfirming
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.accentColor, 0.08)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -4630,16 +4948,6 @@ Panel {
                 }
               }
               onClicked: root.cancelSetup()
-            }
-
-            Text {
-              width: parent.width
-              text: "SETTINGS"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 0.8
             }
 
             ChromeToggle {
@@ -4658,7 +4966,7 @@ Panel {
               Keys.onPressed: function(event) {
                 if (event.key === Qt.Key_Escape) {
                   event.accepted = true
-                  root.setConfigFileModeEnabled(false)
+                  root.cancelSetup()
                 } else if (event.key === Qt.Key_Tab) {
                   event.accepted = true
                   if (root.configFileBackwardTab(event))
@@ -4691,7 +4999,7 @@ Panel {
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(3)
                   foreground: root.foreground
-                  accent: root.controlAccentColor
+                  accent: root.accentColor
                   background: root.alpha(root.foreground, 0.025)
                   bordered: !root.compactChromeEnabled
                   selected: root.settingsSection === modelData.value
@@ -4711,10 +5019,11 @@ Panel {
           radius: root.panelRadius
           color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
           borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
+          onVisibleChanged: if (visible) root.scheduleConfigFileRefresh()
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape) {
               event.accepted = true
-              root.setConfigFileModeEnabled(false)
+              root.cancelSetup()
             } else if ((event.modifiers & Qt.ControlModifier) !== 0
                 && event.key === Qt.Key_R) {
               event.accepted = true
@@ -4775,62 +5084,137 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Edit JSON with the keyboard. Ctrl+S or Ctrl+Enter applies, Ctrl+R reloads, and Tab cycles through the editor actions. The saved Home Assistant connection URL and token stay protected and are never shown here."
+              text: "Edit JSON with the keyboard. Ctrl+S or Ctrl+Enter applies, Ctrl+R reloads, and Tab cycles through the editor actions. Esc returns to AC controls. Use "
+                + root.shortcutDisplay(root.shortcutValue("open_settings"))
+                + " to reopen Settings when Keyboard shortcuts are enabled. The saved Home Assistant connection URL and token stay protected and are never shown here."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
 
-            TextArea {
-              id: configFileEditor
+            Flickable {
+              id: configFileEditorScroll
               width: parent.width
               height: Style.space(420)
-              text: root.configFileText
-              enabled: !root.configFileBusy
-              color: root.foreground
-              selectionColor: root.alpha(root.controlAccentColor, 0.36)
-              selectedTextColor: root.foreground
-              font.family: "monospace"
-              font.pixelSize: Style.font.caption
-              padding: Style.space(10)
-              selectByMouse: true
-              persistentSelection: true
-              textFormat: TextEdit.PlainText
-              wrapMode: TextEdit.NoWrap
-              activeFocusOnTab: true
-              background: Rectangle {
-                color: root.alpha(root.appearanceBackgroundColor, 0.88)
-                radius: root.compactRadius
-                border.color: configFileEditor.activeFocus
-                  ? root.controlAccentColor : root.alpha(root.foreground, 0.12)
-                border.width: 1
+              contentWidth: width
+              contentHeight: Math.max(height,
+                configFileEditor.contentHeight + configFileEditor.topPadding
+                  + configFileEditor.bottomPadding)
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              flickableDirection: Flickable.VerticalFlick
+              interactive: true
+              ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AlwaysOn
+                interactive: true
               }
-              onTextChanged: {
-                if (text !== root.configFileText) root.configFileText = text
-                if (!root.configFileBusy) root.configFileStatus = ""
-              }
-              Keys.onEscapePressed: function(event) {
-                event.accepted = true
-                root.setConfigFileModeEnabled(false)
-              }
-              Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-                  event.accepted = true
-                  if (root.configFileBackwardTab(event))
-                    configFileModeToggle.forceActiveFocus()
-                  else
-                    configFileApplyButton.forceActiveFocus()
-                } else if ((event.modifiers & Qt.ControlModifier) !== 0
-                    && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
-                      || event.key === Qt.Key_S)) {
-                  event.accepted = true
-                  root.applyConfigFile()
-                } else if ((event.modifiers & Qt.ControlModifier) !== 0
-                    && event.key === Qt.Key_R) {
-                  event.accepted = true
-                  root.reloadConfigFile()
+
+              onContentHeightChanged: Qt.callLater(root.ensureConfigFileCursorVisible)
+
+              TextArea {
+                id: configFileEditor
+                width: configFileEditorScroll.width
+                height: Math.max(configFileEditorScroll.height,
+                  contentHeight + topPadding + bottomPadding)
+                text: root.configFileText
+                enabled: !root.configFileBusy
+                color: root.foreground
+                selectionColor: root.alpha(root.controlAccentColor, 0.36)
+                selectedTextColor: root.foreground
+                font.family: "monospace"
+                font.pixelSize: Style.font.caption
+                padding: Style.space(10)
+                selectByMouse: true
+                persistentSelection: true
+                textFormat: TextEdit.PlainText
+                wrapMode: TextEdit.NoWrap
+                activeFocusOnTab: true
+                background: Rectangle {
+                  color: root.alpha(root.appearanceBackgroundColor, 0.88)
+                  radius: root.compactRadius
+                  border.color: configFileEditor.activeFocus
+                    ? root.controlAccentColor : root.alpha(root.foreground, 0.12)
+                  border.width: 1
                 }
+                onTextChanged: {
+                  if (!root.configFileEditorSyncing) {
+                    if (text !== root.configFileText) root.configFileText = text
+                    if (!root.configFileBusy) root.configFileStatus = ""
+                  }
+                  Qt.callLater(root.ensureConfigFileCursorVisible)
+                }
+                onCursorPositionChanged: {
+                  // Do one immediate pass for key-repeat, then another after
+                  // Qt has laid out the newly selected line.
+                  root.ensureConfigFileCursorVisible()
+                  Qt.callLater(root.ensureConfigFileCursorVisible)
+                }
+                onVisibleChanged: {
+                  if (visible && root.configFileModeEnabled) {
+                    root.scheduleConfigFileRefresh()
+                    Qt.callLater(root.focusConfigFileEditor)
+                  }
+                }
+                onActiveFocusChanged: {
+                  if (activeFocus) {
+                    if (String(text || "").trim() === "")
+                      root.scheduleConfigFileRefresh()
+                    Qt.callLater(root.ensureConfigFileCursorVisible)
+                  }
+                }
+
+                WheelHandler {
+                  id: configFileWheelHandler
+                  target: null
+                  onWheel: function(event) {
+                    var delta = Number(event.angleDelta.y || 0)
+                    if (delta === 0) delta = Number(event.pixelDelta.y || 0)
+                    if (delta !== 0) {
+                      root.scrollConfigFileBy(-delta / 3)
+                      event.accepted = true
+                    }
+                  }
+                }
+
+                Keys.onEscapePressed: function(event) {
+                  event.accepted = true
+                  root.cancelSetup()
+                }
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                    event.accepted = true
+                    if (root.configFileBackwardTab(event))
+                      configFileModeToggle.forceActiveFocus()
+                    else
+                      configFileApplyButton.forceActiveFocus()
+                  } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                      && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                        || event.key === Qt.Key_S)) {
+                    event.accepted = true
+                    root.applyConfigFile()
+                  } else if ((event.modifiers & Qt.ControlModifier) !== 0
+                      && event.key === Qt.Key_R) {
+                    event.accepted = true
+                    root.reloadConfigFile()
+                  } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down
+                      || event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+                    root.ensureConfigFileCursorVisible()
+                    Qt.callLater(root.ensureConfigFileCursorVisible)
+                  }
+                }
+              }
+
+              // Some Qt builds coalesce cursor-change callbacks while a key
+              // is held. Keep the viewport following the cursor until the
+              // repeat finishes, including the exact bottom end position.
+              Timer {
+                id: configFileCursorVisibilityTimer
+                interval: 16
+                repeat: true
+                running: root.setupOpen && root.configFileModeEnabled
+                  && configFileEditor.visible && configFileEditor.activeFocus
+                onTriggered: root.ensureConfigFileCursorVisible()
               }
             }
 
@@ -4868,8 +5252,8 @@ Panel {
                 fontSize: Style.font.bodySmall
                 enabled: !root.configFileBusy && !root.preferenceBusy
                 fontFamily: root.fontFamily
-                foreground: Color.popups.background
-                accent: root.controlAccentColor
+                foreground: root.accentTextColor
+                accent: root.accentColor
                 background: root.accentColor
                 bordered: false
                 radius: root.compactRadius
@@ -4883,7 +5267,7 @@ Panel {
                       configFileReloadButton.forceActiveFocus()
                   } else if (event.key === Qt.Key_Escape) {
                     event.accepted = true
-                    root.setConfigFileModeEnabled(false)
+                    root.cancelSetup()
                   }
                 }
                 onClicked: root.applyConfigFile()
@@ -4898,7 +5282,7 @@ Panel {
                 enabled: !root.configFileBusy && !root.preferenceBusy
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -4913,7 +5297,7 @@ Panel {
                       configFileModeToggle.forceActiveFocus()
                   } else if (event.key === Qt.Key_Escape) {
                     event.accepted = true
-                    root.setConfigFileModeEnabled(false)
+                    root.cancelSetup()
                   }
                 }
                 onClicked: {
@@ -5065,7 +5449,7 @@ Panel {
               value: root.setupSelectedEntity
               foreground: root.foreground
               background: root.appearanceBackgroundColor
-              popupBorder: Color.popups.border
+              popupBorder: root.appearancePopupBorderColor
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
               controlRadius: root.compactRadius
@@ -5224,8 +5608,8 @@ Panel {
               fontSize: Style.font.bodySmall
               enabled: root.setupCanSubmit
               fontFamily: root.fontFamily
-              foreground: Color.popups.background
-              accent: root.controlAccentColor
+              foreground: root.accentTextColor
+              accent: root.accentColor
               background: root.accentColor
               bordered: false
               radius: root.compactRadius
@@ -5238,7 +5622,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Style.space(16)
                 height: width
-                color: Color.popups.background
+                color: root.accentTextColor
                 strokeWidth: Style.space(2)
               }
             }
@@ -5253,7 +5637,7 @@ Panel {
               enabled: !root.setupBusy && !root.localServerBusy
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -5413,7 +5797,7 @@ Panel {
                 confirmTooltip: "Run the local Home Assistant setup script"
                 backTooltip: "Cancel local Home Assistant setup"
                 actionColor: root.accentColor
-                actionTextColor: Color.popups.background
+                actionTextColor: root.accentTextColor
                 idleBackground: root.alpha(root.accentColor, 0.07)
                 backTextColor: root.foreground
                 backBackground: root.alpha(root.foreground, 0.025)
@@ -5436,7 +5820,7 @@ Panel {
                 fontSize: Style.font.caption
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -5589,7 +5973,7 @@ Panel {
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(4)
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       selected: root.temperatureDisplay === modelData.value
@@ -5661,7 +6045,7 @@ Panel {
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(3)
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       selected: root.displayTemperatureUnitCode === modelData.value
@@ -5761,7 +6145,7 @@ Panel {
                         fontSize: Style.font.caption
                         horizontalPadding: Style.space(4)
                         foreground: root.foreground
-                        accent: root.controlAccentColor
+                        accent: root.accentColor
                         background: root.alpha(root.foreground, 0.025)
                         bordered: !root.compactChromeEnabled
                         selected: root.historySource === "local"
@@ -5778,7 +6162,7 @@ Panel {
                         fontSize: Style.font.caption
                         horizontalPadding: Style.space(4)
                         foreground: root.foreground
-                        accent: root.controlAccentColor
+                        accent: root.accentColor
                         background: root.alpha(root.foreground, 0.025)
                         bordered: !root.compactChromeEnabled
                         selected: root.historySource === "server"
@@ -5923,7 +6307,7 @@ Panel {
                     fontSize: Style.font.caption
                     fontFamily: root.fontFamily
                     foreground: root.foreground
-                    accent: root.controlAccentColor
+                    accent: root.accentColor
                     background: root.alpha(root.foreground, 0.025)
                     bordered: !root.compactChromeEnabled
                     radius: root.compactRadius
@@ -6150,7 +6534,7 @@ Panel {
                       fontSize: Style.font.bodySmall
                       fontFamily: root.fontFamily
                       foreground: root.accentTextColor
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.accentColor
                       bordered: false
                       radius: root.compactRadius
@@ -6182,7 +6566,7 @@ Panel {
                       fontSize: Style.font.bodySmall
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.06)
                       bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
@@ -6212,7 +6596,7 @@ Panel {
                       fontSize: Style.font.caption
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
@@ -6237,7 +6621,7 @@ Panel {
                       horizontalPadding: Style.space(3)
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
@@ -6260,7 +6644,7 @@ Panel {
                       horizontalPadding: Style.space(3)
                       fontFamily: root.fontFamily
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
@@ -6339,6 +6723,18 @@ Panel {
                   font.letterSpacing: 0.8
                 }
 
+                Text {
+                  width: parent.width
+                  text: "ROLLING WINDOW · PAST " + root.formatHours(root.historyHours)
+                    + " ENDING NOW"
+                  color: root.accentColor
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.35
+                  wrapMode: Text.WordWrap
+                }
+
                 Row {
                   id: historyRangeChoices
                   width: parent.width
@@ -6357,7 +6753,7 @@ Panel {
                     fontSize: Style.font.caption
                     horizontalPadding: Style.space(2)
                     foreground: root.foreground
-                    accent: root.controlAccentColor
+                    accent: root.accentColor
                     background: root.alpha(root.foreground, 0.025)
                     bordered: !root.compactChromeEnabled
                     selected: modelData.value === "custom"
@@ -6417,8 +6813,8 @@ Panel {
                   text: "APPLY"
                   fontSize: Style.font.caption
                   enabled: !root.preferenceBusy
-                  foreground: Color.popups.background
-                  accent: root.controlAccentColor
+                  foreground: root.accentTextColor
+                  accent: root.accentColor
                   background: root.accentColor
                   bordered: false
                   radius: root.compactRadius
@@ -6435,8 +6831,8 @@ Panel {
                   opacity: showHistoryDescription ? 1 : 0
                   clip: true
                   text: root.experimentalHistoryEnabled
-                    ? "Extended history includes 7-day, 30-day, and custom ranges. For long recordings, an always-on external server logger is recommended."
-                    : "The chart keeps the selected range (" + root.formatHours(root.historyHours) + " hours). Local logging needs this PC active; sleep, shutdown, and restart periods remain empty. Extended and custom ranges are in Experimental."
+                    ? "The graphic shows the past " + root.formatHours(root.historyHours) + " ending now. Extended history includes 7-day, 30-day, and custom ranges. For long recordings, an always-on external server logger is recommended."
+                    : "The graphic shows the past " + root.formatHours(root.historyHours) + " ending now. Local logging needs this PC active; sleep, shutdown, and restart periods remain empty. Extended and custom ranges are in Experimental."
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -6526,6 +6922,19 @@ Panel {
               fontFamily: root.fontFamily
               chromeLess: root.compactChromeEnabled
               onClicked: root.setConfigFileModeEnabled(!root.configFileModeEnabled)
+            }
+
+            ChromeToggle {
+              width: parent.width
+              label: "Global Tab navigation"
+              description: "Keep Tab and Shift+Tab inside this panel and move through its controls instead of switching panels."
+              checked: root.globalTabNavigationEnabled
+              enabled: !root.preferenceBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
+              onClicked: root.setGlobalTabNavigationEnabled(!root.globalTabNavigationEnabled)
             }
 
             ChromeToggle {
@@ -6716,7 +7125,7 @@ Panel {
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(2)
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.foreground, 0.025)
                       bordered: !root.compactChromeEnabled
                       selected: root.barTemperatureMode === modelData.value
@@ -6749,7 +7158,7 @@ Panel {
                       leftAlign: true
                       horizontalPadding: Style.space(10)
                       foreground: root.foreground
-                      accent: root.controlAccentColor
+                      accent: root.accentColor
                       background: root.alpha(root.accentColor,
                         root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? 0.10 : 0.025)
                       bordered: !root.compactChromeEnabled
@@ -6823,7 +7232,7 @@ Panel {
               fontSize: Style.font.caption
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -6856,7 +7265,7 @@ Panel {
               fontSize: Style.font.caption
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -6888,7 +7297,7 @@ Panel {
               fontSize: Style.font.caption
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -6947,7 +7356,8 @@ Panel {
                 valueText: root.customBackgroundHexText
                 swatches: root.appearanceBackgroundPalette
                 foreground: root.foreground
-                accent: root.interactionAccentColor
+                accent: root.accentColor
+                accentTextColor: root.accentTextColor
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
@@ -6978,7 +7388,8 @@ Panel {
                 valueText: root.customAccentHexText
                 swatches: ["#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7"]
                 foreground: root.foreground
-                accent: root.interactionAccentColor
+                accent: root.accentColor
+                accentTextColor: root.accentTextColor
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
@@ -6996,7 +7407,8 @@ Panel {
                 valueText: root.customControlHexText
                 swatches: ["#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7"]
                 foreground: root.foreground
-                accent: root.interactionAccentColor
+                accent: root.accentColor
+                accentTextColor: root.accentTextColor
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
@@ -7055,7 +7467,8 @@ Panel {
                     valueText: root.appearanceDeviceColorText(modelData)
                     swatches: root.appearanceDevicePalette
                     foreground: root.foreground
-                    accent: root.interactionAccentColor
+                    accent: root.accentColor
+                    accentTextColor: root.accentTextColor
                     fontFamily: root.fontFamily
                     enabled: !root.preferenceBusy
                     chromeLess: root.compactChromeEnabled
@@ -7261,7 +7674,7 @@ Panel {
                 fontSize: Style.font.caption
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -7585,7 +7998,7 @@ Panel {
               fontSize: Style.font.caption
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -7750,7 +8163,7 @@ Panel {
                 fontSize: Style.font.bodySmall
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.accentColor, 0.08)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -7772,7 +8185,7 @@ Panel {
                 horizontalPadding: Style.space(3)
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -7885,7 +8298,7 @@ Panel {
                 value: root.setupSelectedEntity
                 foreground: root.foreground
                 background: root.appearanceBackgroundColor
-                popupBorder: Color.popups.border
+                popupBorder: root.appearancePopupBorderColor
                 accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 controlRadius: root.compactRadius
@@ -7902,8 +8315,8 @@ Panel {
                 fontSize: Style.font.bodySmall
                 fontFamily: root.fontFamily
                 enabled: root.reconnectCanSubmit && root.connectionEditing
-                foreground: Color.popups.background
-                accent: root.controlAccentColor
+                foreground: root.accentTextColor
+                accent: root.accentColor
                 background: root.accentColor
                 bordered: false
                 radius: root.compactRadius
@@ -7916,7 +8329,7 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   width: Style.space(16)
                   height: width
-                  color: Color.popups.background
+                  color: root.accentTextColor
                   strokeWidth: Style.space(2)
                 }
               }
@@ -8026,8 +8439,8 @@ Panel {
               }
             }
 
-            Button {
-              id: localServerDetailsToggle
+              Button {
+                id: localServerDetailsToggle
               width: parent.width
               height: Style.space(38)
               text: root.localServerExpanded
@@ -8038,7 +8451,7 @@ Panel {
               fontSize: Style.font.bodySmall
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.foreground, 0.025)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -8103,7 +8516,7 @@ Panel {
                   confirmTooltip: "Run the local Home Assistant setup script"
                   backTooltip: "Cancel local Home Assistant setup"
                   actionColor: root.accentColor
-                  actionTextColor: Color.popups.background
+                  actionTextColor: root.accentTextColor
                   idleBackground: root.alpha(root.accentColor, 0.07)
                   backTextColor: root.foreground
                   backBackground: root.alpha(root.foreground, 0.025)
@@ -8126,7 +8539,7 @@ Panel {
                   fontSize: Style.font.caption
                   fontFamily: root.fontFamily
                   foreground: root.foreground
-                  accent: root.controlAccentColor
+                  accent: root.accentColor
                   background: root.alpha(root.foreground, 0.025)
                   bordered: !root.compactChromeEnabled
                   radius: root.compactRadius
@@ -8229,7 +8642,7 @@ Panel {
               fontSize: Style.font.bodySmall
               fontFamily: root.fontFamily
               foreground: root.foreground
-              accent: root.controlAccentColor
+              accent: root.accentColor
               background: root.alpha(root.accentColor, 0.09)
               bordered: !root.compactChromeEnabled
               radius: root.compactRadius
@@ -8441,7 +8854,7 @@ Panel {
                       text: root.resetAppBusy ? "RESETTING…" : "RESET NOW"
                       fontSize: Style.font.bodySmall
                       fontFamily: root.fontFamily
-                      foreground: Color.popups.background
+                      foreground: root.contrastingTextColor(root.urgent)
                       accent: root.urgent
                       background: root.urgent
                       bordered: false
@@ -8457,7 +8870,7 @@ Panel {
                         anchors.verticalCenter: parent.verticalCenter
                         width: Style.space(16)
                         height: width
-                        color: Color.popups.background
+                        color: root.contrastingTextColor(root.urgent)
                         strokeWidth: Style.space(2)
                       }
                     }
@@ -8804,7 +9217,7 @@ Panel {
                                 ? "UNINSTALLING…" : root.uninstallActionLabel()
                               fontSize: Style.font.bodySmall
                               fontFamily: root.fontFamily
-                              foreground: Color.popups.background
+                              foreground: root.contrastingTextColor(root.urgent)
                               accent: root.urgent
                               background: root.urgent
                               bordered: false
@@ -8820,7 +9233,7 @@ Panel {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: Style.space(16)
                                 height: width
-                                color: Color.popups.background
+                                color: root.contrastingTextColor(root.urgent)
                                 strokeWidth: Style.space(2)
                               }
                             }
@@ -8954,7 +9367,7 @@ Panel {
                 anchors.rightMargin: Style.space(7)
                 anchors.bottomMargin: Style.space(7)
                 color: root.stateColor
-                border.color: root.alpha(Color.popups.background, 0.92)
+                border.color: root.alpha(root.appearanceBackgroundColor, 0.92)
                 border.width: Style.space(2)
               }
             }
@@ -9032,7 +9445,7 @@ Panel {
                 iconSize: Style.font.body
                 fontFamily: root.fontFamily
                 foreground: root.foreground
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.alpha(root.foreground, 0.035)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
@@ -9057,7 +9470,7 @@ Panel {
           value: root.pendingEntity !== "" ? root.pendingEntity : root.selectedEntity
           foreground: root.foreground
           background: root.appearanceBackgroundColor
-          popupBorder: Color.popups.border
+          popupBorder: root.appearancePopupBorderColor
           accent: root.controlAccentColor
           fontFamily: root.fontFamily
           controlRadius: root.compactRadius
@@ -9183,9 +9596,11 @@ Panel {
                 }
                 powerCancelEnabled: root.connected && !root.masterSwitchBusy
                 showClimateControls: root.showClimateControls
-                accent: root.deviceControlAccent(String(modelData))
+                accent: root.deviceCardAccent(String(modelData))
+                controlAccent: root.deviceControlAccent(String(modelData))
                 cardAccent: root.deviceCardAccent(String(modelData))
                 popupBackground: root.appearanceBackgroundColor
+                popupBorder: root.appearancePopupBorderColor
                 foreground: root.foreground
                 dim: root.dim
                 fontFamily: root.fontFamily
@@ -9386,7 +9801,7 @@ Panel {
                 enabled: root.isOn && !root.otherActionBusy
                 fontFamily: root.fontFamily
                 foreground: root.isOn ? root.accentColor : root.dim
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 tooltipText: "Lower target temperature"
@@ -9432,7 +9847,7 @@ Panel {
                 enabled: root.isOn && !root.otherActionBusy
                 fontFamily: root.fontFamily
                 foreground: root.isOn ? root.accentColor : root.dim
-                accent: root.controlAccentColor
+                accent: root.accentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
                 bordered: !root.compactChromeEnabled
                 tooltipText: "Raise target temperature"
@@ -9474,7 +9889,7 @@ Panel {
               fillColor: root.controlAccentColor
               knobColor: root.controlAccentColor
               tickCount: 3
-              tickColor: root.alpha(Color.popups.background, 0.82)
+              tickColor: root.alpha(root.appearanceBackgroundColor, 0.82)
               onMoved: function(value) { root.previewTarget(value) }
               onReleased: function(value) { root.commitTarget(value) }
             }
@@ -9510,7 +9925,7 @@ Panel {
             actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
             cancelEnabled: root.connected && !root.masterSwitchBusy
             foreground: root.foreground
-            accent: root.controlAccentColor
+            accent: root.deviceCardAccent(root.selectedEntity)
             fontFamily: root.fontFamily
             panelRadius: root.compactRadius
             chromeLess: root.compactChromeEnabled
@@ -9607,7 +10022,7 @@ Panel {
                       actionEnabled: root.connected && !root.actionBusy && !root.masterSwitchBusy
                       cancelEnabled: root.connected && !root.masterSwitchBusy
                       foreground: root.foreground
-                      accent: root.deviceControlAccent(splitPowerCard.entityId)
+                      accent: root.deviceCardAccent(splitPowerCard.entityId)
                       fontFamily: root.fontFamily
                       panelRadius: root.compactRadius
                       chromeLess: root.compactChromeEnabled
@@ -9709,7 +10124,7 @@ Panel {
                   value: root.activeMode
                   foreground: root.foreground
                   background: root.appearanceBackgroundColor
-                  popupBorder: Color.popups.border
+                  popupBorder: root.appearancePopupBorderColor
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
@@ -9730,7 +10145,7 @@ Panel {
                   value: root.activeFanMode
                   foreground: root.foreground
                   background: root.appearanceBackgroundColor
-                  popupBorder: Color.popups.border
+                  popupBorder: root.appearancePopupBorderColor
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
@@ -9799,7 +10214,7 @@ Panel {
               confirmTooltip: "Turn off every available climate device"
               backTooltip: "Keep the climate devices running"
               actionColor: root.accentColor
-              actionTextColor: Color.popups.background
+              actionTextColor: root.accentTextColor
               idleBackground: root.alpha(root.accentColor, 0.07)
               backTextColor: root.foreground
               backBackground: root.alpha(root.foreground, 0.025)
@@ -9826,7 +10241,7 @@ Panel {
               confirmTooltip: "Turn on every available climate device"
               backTooltip: "Keep the climate devices off"
               actionColor: root.urgent
-              actionTextColor: Color.popups.background
+              actionTextColor: root.contrastingTextColor(root.urgent)
               idleBackground: root.alpha(root.urgent, 0.07)
               backTextColor: root.foreground
               backBackground: root.alpha(root.foreground, 0.025)
@@ -9854,10 +10269,12 @@ Panel {
               opacity: hasMasterSwitchStatus ? 1 : 0
               clip: true
               color: root.surfaceColor(root.alpha(
-                root.turnOffAllError !== "" || root.turnOnAllError !== "" ? root.urgent : root.accentColor,
+                root.turnOffAllError !== "" || root.turnOnAllError !== ""
+                  ? root.urgent : root.accentColor,
                 0.09))
                   borderSpec: root.surfaceBorder(Border.flat(root.alpha(
-                    root.turnOffAllError !== "" || root.turnOnAllError !== "" ? root.urgent : root.accentColor,
+                    root.turnOffAllError !== "" || root.turnOnAllError !== ""
+                      ? root.urgent : root.accentColor,
                     0.32), 1))
               radius: root.compactRadius
 
@@ -9899,15 +10316,19 @@ Panel {
           clip: true
           points: root.historyPoints
           rangeHours: root.historyHours
+          windowEndTimestamp: root.historyWindowEnd
           unit: root.displayTemperatureUnit
           connected: root.connected
           showLiveIndicator: root.historySource === "server"
           sourceLabel: root.historySourceLabel
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
-          accent: root.controlAccentColor
-          background: root.alpha(root.foreground, 0.035)
-          borderColor: root.alpha(root.foreground, 0.14)
+          accent: root.accentColor
+          background: root.customAppearanceEnabled
+            ? root.panelSurface : root.alpha(root.foreground, 0.035)
+          borderColor: root.customAppearanceEnabled
+            ? root.alpha(root.accentColor, 0.24)
+            : root.alpha(root.foreground, 0.14)
           fontFamily: root.fontFamily
           panelRadius: root.uiRadius
           chromeLess: root.compactChromeEnabled

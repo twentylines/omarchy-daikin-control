@@ -23,6 +23,10 @@ Item {
   property bool showLiveIndicator: false
   property bool chromeLess: false
   property color liveColor: "#79B889"
+  // The panel updates this value while the chart is visible so the time
+  // window remains a rolling "last N hours" window instead of freezing at
+  // the moment the last status response arrived.
+  property real windowEndTimestamp: 0
 
   implicitHeight: Style.space(272)
   height: implicitHeight
@@ -89,8 +93,12 @@ Item {
     for (var i = 0; i < root.points.length; i++) {
       var item = root.points[i]
       if (!item || !isFinite(Number(item.timestamp)) || !isFinite(Number(item.temperature))) continue
+      var timestamp = Number(item.timestamp)
+      // Accept legacy logs that stored Unix time in milliseconds as well as
+      // the current seconds-based format.
+      if (timestamp > 100000000000) timestamp /= 1000
       next.push({
-        timestamp: Number(item.timestamp),
+        timestamp: timestamp,
         temperature: Number(item.temperature),
       })
     }
@@ -132,7 +140,7 @@ Item {
 
   function visiblePointsInRange() {
     var values = root.numericPoints()
-    var now = Date.now() / 1000
+    var now = root.windowEndTimestamp > 0 ? root.windowEndTimestamp : Date.now() / 1000
     var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
     var start = now - rangeSeconds
     var visible = []
@@ -256,7 +264,10 @@ Item {
           }
 
           Text {
-            text: root.formatHours(root.rangeHours)
+            // Keep the compact range badge from the original chart. The
+            // settings copy explains that this is a rolling past-X window;
+            // the chart only needs the selected duration here.
+            text: root.formatHours(root.rangeHours) + " H"
             color: root.accent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -379,7 +390,8 @@ Item {
             var context = getContext("2d")
             context.reset()
 
-            var now = Date.now() / 1000
+            var now = root.windowEndTimestamp > 0
+              ? root.windowEndTimestamp : Date.now() / 1000
             var rangeSeconds = Math.max(3600, Number(root.rangeHours) * 3600)
             var start = now - rangeSeconds
             var visible = root.visiblePointsInRange()
@@ -537,6 +549,7 @@ Item {
             target: root
             function onPointsChanged() { chart.requestPaint() }
             function onRangeHoursChanged() { chart.requestPaint() }
+            function onWindowEndTimestampChanged() { chart.requestPaint() }
             function onUnitChanged() { chart.requestPaint() }
             function onEmptyMessageChanged() { chart.requestPaint() }
             function onConnectedChanged() { chart.requestPaint() }

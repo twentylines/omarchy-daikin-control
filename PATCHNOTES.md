@@ -1,5 +1,22 @@
 # Patch Notes
 
+## 0.3.0
+
+- Fixed Config File Mode so its redacted JSON loads automatically, Ctrl+S and
+  Ctrl+Enter send a compact valid payload, and Esc returns to AC Controls.
+- Added reliable arrow/page navigation, mouse-wheel scrolling, and an
+  interactive scrollbar to the config editor, plus the Settings shortcut hint;
+  held cursor movement now follows the editor to the exact top or bottom.
+- Added the optional global Tab/Shift+Tab focus mode under Experimental.
+- Applied custom background and control colours through the outer panel and
+  shared controls, including dropdowns, sliders, switches, and action buttons.
+- Guarded both MasterSwitch directions so a cancel/reversal only targets the
+  devices whose original state the bulk action changed.
+- Made the ambient chart use the selected rolling window ending now: choosing
+  X H displays the past X hours, reports an empty selected range accurately,
+  and identifies a stale external logger instead of making the readings look
+  deleted. Kept the chart range badge compact (for example, `24 H`).
+
 ## 2.6.2
 
 - Keep a newly typed external-server address as a draft until **CONNECT TO
