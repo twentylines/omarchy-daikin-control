@@ -1,5 +1,12 @@
 # Patch Notes
 
+## 0.3.5b
+
+- Fixed every AC mode glyph (cool, heat, dry, fan, and auto) so its painted
+  bounds are optically centred in the hero tile and climate-controls header.
+- Preserved the shell's baseline-safe optical renderer in the menu bar and
+  checked the surrounding panel spacing for related alignment regressions.
+
 ## 0.3.5a
 
 - Improved chart-range and external-history refresh performance.

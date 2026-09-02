@@ -17,7 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginVersion: "0.3.5a"
+  readonly property string pluginVersion: "0.3.5b"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"
@@ -9777,17 +9777,14 @@ Panel {
                 Behavior on scale { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
               }
 
-              Text {
-                width: Style.space(36)
-                height: Style.space(36)
-                anchors.centerIn: parent
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
+              ClimateModeGlyph {
+                id: climateModeGlyph
+                anchors.fill: parent
                 text: root.climateModeIcon(root.activeMode)
                 color: root.isOn ? root.accentColor : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
-                font.bold: true
+                fontFamily: root.fontFamily
+                fontSize: Style.font.display
+                bold: true
               }
 
               Rectangle {
@@ -10516,15 +10513,13 @@ Panel {
                 width: parent.width
                 spacing: Style.space(9)
 
-                Text {
+                ClimateModeGlyph {
                   width: Style.space(30)
                   height: Style.space(30)
                   text: root.climateModeIcon(root.activeMode)
                   color: root.accentColor
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.display
-                  horizontalAlignment: Text.AlignHCenter
-                  verticalAlignment: Text.AlignVCenter
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.display
                 }
 
                 Column {

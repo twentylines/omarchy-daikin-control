@@ -1337,13 +1337,23 @@ class HelperTests(unittest.TestCase):
         self.assertIn("onConfirmingChanged", critical)
         self.assertIn("confirmationFocusTimer", critical)
 
-    def test_plugin_version_is_0_3_5a_and_settings_title_is_not_repeated(self):
+    def test_plugin_version_is_0_3_5b_and_settings_title_is_not_repeated(self):
         manifest = json.loads((HELPER.parent / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.5a")
+        self.assertEqual(manifest["version"], "0.3.5b")
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
-        self.assertIn('readonly property string pluginVersion: "0.3.5a"', panel)
+        bar = (HELPER.parent / "BarWidget.qml").read_text(encoding="utf-8")
+        glyph = (HELPER.parent / "ClimateModeGlyph.qml").read_text(encoding="utf-8")
+        self.assertIn('readonly property string pluginVersion: "0.3.5b"', panel)
         self.assertIn('text: "VERSION " + root.pluginVersion', panel)
         self.assertNotIn('text: "SETTINGS"\n              color: root.dim', panel)
+        self.assertIn("ClimateModeGlyph", panel)
+        self.assertIn("OpticalGlyph", bar)
+        self.assertNotIn("ClimateModeGlyph", bar)
+        self.assertIn("tightBoundingRect", glyph)
+        self.assertIn("root.inkWidth", glyph)
+        self.assertIn("root.inkHeight", glyph)
+        self.assertIn("glyph.baselineOffset + glyphMetrics.tightBoundingRect.y", glyph)
+        self.assertIn("root.inkTop", glyph)
 
     def test_0_3_4_chart_and_surface_regressions_are_guarded(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
