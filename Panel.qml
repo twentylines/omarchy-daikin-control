@@ -4619,6 +4619,7 @@ Panel {
 
             ChromeToggle {
               id: configFileModeToggle
+              visible: root.configFileModeEnabled
               width: parent.width
               label: "CONFIG FILE MODE"
               description: "Replace the setting cards with a keyboard-first JSON editor. Secrets stay hidden."
@@ -6423,6 +6424,7 @@ Panel {
             }
 
             ChromeToggle {
+              visible: !root.configFileModeEnabled
               width: parent.width
               label: "Config file mode"
               description: "Use the keyboard-first JSON editor above the settings panes. The Home Assistant token stays protected."

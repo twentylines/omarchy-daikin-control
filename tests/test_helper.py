@@ -1195,6 +1195,8 @@ class HelperTests(unittest.TestCase):
         self.assertIn("appearance_auto_background", panel)
         self.assertIn("appearanceBackgroundColor", panel)
         self.assertIn('label: "CONFIG FILE MODE"', panel)
+        self.assertIn('visible: root.configFileModeEnabled\n              width: parent.width\n              label: "CONFIG FILE MODE"', panel)
+        self.assertIn('visible: !root.configFileModeEnabled\n              width: parent.width\n              label: "Config file mode"', panel)
         self.assertIn('id: configFileCard', panel)
         self.assertIn('id: configFileEditor', panel)
         self.assertIn('command = ["python3", root.helperPath, "set-config-file"]', panel)

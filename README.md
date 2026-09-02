@@ -118,10 +118,11 @@ Local history is recorded while this PC is available. The chart keeps up to
   controls. The background follows Omarchy by default, or can be set to a
   fixed colour. **Compact UI** removes idle card chrome and tightens spacing
   while preserving readable padding.
-- **Config file mode** replaces the settings panes with a keyboard-first JSON
-  editor under the **SETTINGS** title. Press **Ctrl+Enter** to validate and
-  save; the saved Home Assistant connection URL and token are never included
-  in the document.
+- **Config file mode** is enabled from **Experimental**. Once enabled, it
+  replaces the settings panes with a keyboard-first JSON editor under the
+  **SETTINGS** title, where the mode can be disabled again. Press **Ctrl+Enter**
+  to validate and save; the saved Home Assistant connection URL and token are
+  never included in the document.
 - **Keyboard shortcuts** enables a dedicated **Shortcuts** section where each
   shortcut can be edited or disabled. **Reset shortcuts** restores the defaults.
 - With multiple ACs and **Globally synced controls** off, the power shortcut
