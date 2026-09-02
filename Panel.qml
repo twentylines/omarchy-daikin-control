@@ -233,6 +233,9 @@ Panel {
   property bool remoteHistorySourceBusy: false
   property string remoteHistorySourcePayload: ""
   property bool remoteHistoryOperationSucceeded: false
+  // A typed target is only a draft. Keep the paired summary hidden until a
+  // connect or install action has actually saved the pairing.
+  property bool remoteHistoryPairingSaved: false
   property bool remoteHistoryReconfiguring: false
   property string remoteHistoryMessage: ""
   property string remoteHistoryError: ""
@@ -671,7 +674,7 @@ Panel {
     && !syncNonPowerControls
   readonly property bool showMainRemote: !multiUnitActive || globalSyncControls || syncNonPowerControls
   readonly property bool remoteHistoryConfigured: historySource === "server"
-    && String(remoteHistoryTarget || "").trim() !== ""
+    && remoteHistoryPairingSaved
   readonly property bool remoteHistoryStatusMatchesCurrent:
     root.remoteHistoryStatusTarget !== ""
     && root.remoteHistoryStatusTarget === String(root.remoteHistoryTarget || "").trim()
@@ -1842,6 +1845,7 @@ Panel {
         remoteHistoryPortText = String(parsed.history_remote_port || remoteHistoryPortText)
         remoteHistoryUrl = String(parsed.history_remote_url || remoteHistoryUrl)
         remoteHistoryPath = String(parsed.history_remote_path || remoteHistoryPath)
+        remoteHistoryPairingSaved = true
         remoteHistoryTargetBeforeReconfigure = remoteHistoryTarget
         remoteHistoryPortBeforeReconfigure = remoteHistoryPortText
         remoteHistoryUrlBeforeReconfigure = remoteHistoryUrl
@@ -2255,6 +2259,7 @@ Panel {
         remoteHistoryPortText = "22"
         remoteHistoryUrl = root.remoteHistoryDefaultUrl
         remoteHistoryPath = root.remoteHistoryDefaultPath
+        remoteHistoryPairingSaved = false
         remoteHistoryMessage = ""
         remoteHistoryError = ""
         settingsSection = "setup"
@@ -2311,6 +2316,7 @@ Panel {
       remoteHistoryPortText = String(parsed.history_remote_port || "22")
       remoteHistoryUrl = String(parsed.history_remote_url || root.remoteHistoryDefaultUrl)
       remoteHistoryPath = String(parsed.history_remote_path || root.remoteHistoryDefaultPath)
+      remoteHistoryPairingSaved = String(parsed.history_remote_target || "").trim() !== ""
       root.clearRemoteHistoryStatus()
       if (parsed.url) {
         setupUrl = String(parsed.url)

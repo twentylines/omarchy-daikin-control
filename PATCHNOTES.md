@@ -1,5 +1,11 @@
 # Patch Notes
 
+## 2.6.2
+
+- Keep a newly typed external-server address as a draft until **CONNECT TO
+  SERVER** or **INSTALL / UPDATE TIMER** succeeds, so entering an IP no longer
+  collapses the form or starts a connection attempt after the first character.
+
 ## 2.6.1
 
 - Rebuilt the external-server guide around one idempotent setup path with an

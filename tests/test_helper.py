@@ -995,6 +995,20 @@ class HelperTests(unittest.TestCase):
             panel,
         )
 
+    def test_external_server_address_stays_a_draft_while_typing(self):
+        panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn("property bool remoteHistoryPairingSaved: false", panel)
+        self.assertIn(
+            'readonly property bool remoteHistoryConfigured: historySource === "server"\n'
+            '    && remoteHistoryPairingSaved',
+            panel,
+        )
+        target_field = panel.split('id: remoteHistoryTargetField', 1)[1].split(
+            'id: remoteHistoryPortField', 1
+        )[0]
+        self.assertIn("onTextChanged", target_field)
+        self.assertNotIn("startRemoteHistoryConnect", target_field)
+
     def test_settings_sections_put_experimental_before_maintenance(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
         start = panel.index("readonly property var settingsSections:")
