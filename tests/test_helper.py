@@ -586,8 +586,10 @@ class HelperTests(unittest.TestCase):
                             "token": "test-secret",
                             "custom_appearance_enabled": True,
                             "appearance_auto_accent": False,
+                            "appearance_auto_background": False,
                             "appearance_accent": "#C89AAB",
                             "appearance_control": "#8EA7C7",
+                            "appearance_background": "#2A3031",
                             "appearance_device_colors_enabled": True,
                             "appearance_device_colors": {"climate.office": "#C89AAB"},
                             "appearance_transparency": 45,
@@ -602,8 +604,12 @@ class HelperTests(unittest.TestCase):
                 self.assertTrue(parsed["appearance_reset"])
                 self.assertTrue(parsed["custom_appearance_enabled"])
                 self.assertTrue(parsed["appearance_auto_accent"])
+                self.assertTrue(parsed["appearance_auto_background"])
                 self.assertEqual(parsed["appearance_accent"], helper.DEFAULT_APPEARANCE_ACCENT)
                 self.assertEqual(parsed["appearance_control"], helper.DEFAULT_APPEARANCE_CONTROL)
+                self.assertEqual(
+                    parsed["appearance_background"], helper.DEFAULT_APPEARANCE_BACKGROUND
+                )
                 self.assertFalse(parsed["appearance_device_colors_enabled"])
                 self.assertEqual(parsed["appearance_device_colors"], {})
                 self.assertEqual(parsed["appearance_transparency"], 0)
@@ -612,6 +618,107 @@ class HelperTests(unittest.TestCase):
                 saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
                 self.assertTrue(saved["custom_appearance_enabled"])
                 self.assertTrue(saved["appearance_auto_accent"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_appearance_background_can_be_fixed_and_is_validated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            config = {
+                "url": "http://ha.local:8123",
+                "token": "test-secret",
+                "custom_appearance_enabled": True,
+            }
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "appearance_auto_background", "off"
+                    )
+                self.assertEqual(result, 0)
+                self.assertFalse(json.loads(output.getvalue())["value"])
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "appearance_background", "#2A3031"
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue())["value"], "#2A3031")
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertFalse(saved["appearance_auto_background"])
+                self.assertEqual(saved["appearance_background"], "#2A3031")
+                settings = helper.experimental_settings(saved)
+                self.assertFalse(settings["appearance_auto_background"])
+                self.assertEqual(settings["appearance_background"], "#2A3031")
+
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = helper.set_preference(
+                        config, "appearance_background", "not-a-colour"
+                    )
+                self.assertEqual(result, 1)
+                self.assertIn("six-digit hex", output.getvalue())
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_config_file_mode_saves_preferences_without_exposing_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            helper.CONFIG_PATH.write_text(json.dumps({
+                "url": "http://ha.example.test:8123",
+                "token": "do-not-print-this-token",
+                "entity_id": "climate.office",
+            }), encoding="utf-8")
+            payload = json.dumps({
+                "advanced_controls": False,
+                "appearance_background": "#202426",
+                "appearance_compact": True,
+                "config_file_mode_enabled": True,
+            }) + "\n"
+            try:
+                output = io.StringIO()
+                with patch.object(helper.sys, "stdin", io.StringIO(payload)), \
+                        contextlib.redirect_stdout(output):
+                    result = helper.main([str(HELPER), "set-config-file"])
+                self.assertEqual(result, 0)
+                parsed = json.loads(output.getvalue())
+                self.assertTrue(parsed["config_file_saved"])
+                self.assertNotIn("do-not-print-this-token", output.getvalue())
+                self.assertNotIn("url", parsed)
+                saved = json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8"))
+                self.assertEqual(saved["token"], "do-not-print-this-token")
+                self.assertFalse(saved["advanced_controls"])
+                self.assertEqual(saved["appearance_background"], "#202426")
+                self.assertTrue(saved["appearance_compact"])
+                self.assertTrue(saved["config_file_mode_enabled"])
+            finally:
+                helper.CONFIG_PATH = original_path
+
+    def test_config_file_mode_rejects_invalid_values_before_saving(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path = helper.CONFIG_PATH
+            helper.CONFIG_PATH = Path(directory) / "omarchy" / "home-assistant-ac.json"
+            helper.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            original = {
+                "url": "http://ha.example.test:8123",
+                "token": "test-secret",
+                "entity_id": "climate.office",
+                "appearance_background": "#131516",
+            }
+            helper.CONFIG_PATH.write_text(json.dumps(original), encoding="utf-8")
+            payload = json.dumps({"appearance_background": "grey"}) + "\n"
+            try:
+                output = io.StringIO()
+                with patch.object(helper.sys, "stdin", io.StringIO(payload)), \
+                        contextlib.redirect_stdout(output):
+                    result = helper.main([str(HELPER), "set-config-file"])
+                self.assertEqual(result, 1)
+                self.assertIn("six-digit hex", output.getvalue())
+                self.assertEqual(json.loads(helper.CONFIG_PATH.read_text(encoding="utf-8")), original)
             finally:
                 helper.CONFIG_PATH = original_path
 
@@ -1083,6 +1190,17 @@ class HelperTests(unittest.TestCase):
         self.assertIn("showClimateControls: root.showClimateControls", panel)
         self.assertIn("root.setShowClimateControlsEnabled(!root.showClimateControls)", panel)
         self.assertIn('visible: root.customAppearanceEnabled', panel)
+        self.assertIn('label: "Auto · Omarchy background"', panel)
+        self.assertIn('label: "PANEL BACKGROUND"', panel)
+        self.assertIn("appearance_auto_background", panel)
+        self.assertIn("appearanceBackgroundColor", panel)
+        self.assertIn('label: "CONFIG FILE MODE"', panel)
+        self.assertIn('id: configFileCard', panel)
+        self.assertIn('id: configFileEditor', panel)
+        self.assertIn('command = ["python3", root.helperPath, "set-config-file"]', panel)
+        self.assertIn("Ctrl+Enter", panel)
+        self.assertIn('label: "Compact UI · remove cards and borders"', panel)
+        self.assertIn("appearance_compact", panel)
         self.assertIn('label: "Auto · Omarchy accent"', panel)
         self.assertIn('"RESET CUSTOMISATIONS"', panel)
         self.assertIn('label: "SWITCH & SLIDER COLOUR"', panel)

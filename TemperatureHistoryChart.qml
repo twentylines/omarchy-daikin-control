@@ -21,6 +21,7 @@ Item {
   property string emptyMessage: "WAITING FOR LOCAL READINGS…"
   property bool connected: false
   property bool showLiveIndicator: false
+  property bool chromeLess: false
   property color liveColor: "#79B889"
 
   implicitHeight: Style.space(272)
@@ -176,12 +177,12 @@ Item {
   BorderSurface {
     anchors.fill: parent
     radius: root.panelRadius
-    color: root.background
-    borderSpec: Border.flat(root.borderColor, 1)
+    color: root.chromeLess ? "transparent" : root.background
+    borderSpec: root.chromeLess ? Border.none() : Border.flat(root.borderColor, 1)
 
     Column {
       anchors.fill: parent
-      anchors.margins: Style.space(16)
+      anchors.margins: root.chromeLess ? Style.space(8) : Style.space(16)
       spacing: Style.space(7)
 
       Row {
@@ -271,8 +272,9 @@ Item {
         width: parent.width
         height: Style.space(44)
         radius: root.panelRadius
-        color: root.alpha(root.foreground, 0.018)
-        borderSpec: Border.flat(root.alpha(root.foreground, 0.08), 1)
+        color: root.chromeLess ? "transparent" : root.alpha(root.foreground, 0.018)
+        borderSpec: root.chromeLess
+          ? Border.none() : Border.flat(root.alpha(root.foreground, 0.08), 1)
 
         Row {
           id: historySummaryContent
@@ -356,8 +358,9 @@ Item {
         BorderSurface {
           anchors.fill: parent
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.018)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.08), 1)
+          color: root.chromeLess ? "transparent" : root.alpha(root.foreground, 0.018)
+          borderSpec: root.chromeLess
+            ? Border.none() : Border.flat(root.alpha(root.foreground, 0.08), 1)
         }
 
         Canvas {

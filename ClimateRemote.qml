@@ -14,10 +14,12 @@ Item {
   property color dim: Qt.darker(foreground, 1.55)
   property color accent: Color.accent
   property color cardAccent: accent
+  property color popupBackground: Color.popups.background
   property string fontFamily: Style.font.family
   property real panelRadius: Style.cornerRadius
   property bool powerCancelEnabled: true
   property bool showClimateControls: true
+  property bool chromeLess: false
 
   readonly property bool connected: climate && String(climate.entity_id || "") !== ""
   readonly property bool hasLocalPower: String(localState.power || "") !== ""
@@ -98,15 +100,17 @@ Item {
     width: parent.width
     implicitHeight: remoteForm.implicitHeight + Style.space(24)
     radius: root.panelRadius
-    color: root.alpha(root.cardAccent, root.isOn ? 0.075 : 0.035)
-    borderSpec: Border.flat(root.alpha(root.cardAccent, root.isOn ? 0.30 : 0.14), 1)
+    color: root.chromeLess
+      ? "transparent" : root.alpha(root.cardAccent, root.isOn ? 0.075 : 0.035)
+    borderSpec: root.chromeLess
+      ? Border.none() : Border.flat(root.alpha(root.cardAccent, root.isOn ? 0.30 : 0.14), 1)
 
     Column {
       id: remoteForm
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.top: parent.top
-      anchors.margins: Style.space(12)
+      anchors.margins: root.chromeLess ? Style.space(4) : Style.space(12)
       spacing: Style.space(7)
 
       Row {
@@ -158,6 +162,7 @@ Item {
           accent: root.accent
           fontFamily: root.fontFamily
           panelRadius: root.panelRadius
+          chromeLess: root.chromeLess
           onPowerRequested: function(value) { root.powerRequested(value) }
           onPowerCancelRequested: root.powerCancelRequested()
         }
@@ -209,7 +214,7 @@ Item {
               foreground: root.accent
               accent: root.accent
               background: root.alpha(root.accent, 0.08)
-              bordered: true
+              bordered: !root.chromeLess
               radius: width / 2
               enabled: root.enabled && root.isOn && !root.powerPending
               tooltipText: "Lower this target temperature"
@@ -242,7 +247,7 @@ Item {
               foreground: root.accent
               accent: root.accent
               background: root.alpha(root.accent, 0.08)
-              bordered: true
+              bordered: !root.chromeLess
               radius: width / 2
               enabled: root.enabled && root.isOn && !root.powerPending
               tooltipText: "Raise this target temperature"
@@ -271,11 +276,12 @@ Item {
               options: root.modeDropdownOptions
               value: root.activeMode
               foreground: root.foreground
-              background: Color.popups.background
+              background: root.popupBackground
               popupBorder: Color.popups.border
               accent: root.accent
               fontFamily: root.fontFamily
               controlRadius: root.panelRadius
+              chromeLess: root.chromeLess
               enabled: root.enabled && root.isOn && !root.powerPending
               onChanged: function(value) { if (value) root.modeRequested(value) }
             }
@@ -288,11 +294,12 @@ Item {
               options: root.fanModeDropdownOptions
               value: root.activeFanMode
               foreground: root.foreground
-              background: Color.popups.background
+              background: root.popupBackground
               popupBorder: Color.popups.border
               accent: root.accent
               fontFamily: root.fontFamily
               controlRadius: root.panelRadius
+              chromeLess: root.chromeLess
               enabled: root.enabled && root.isOn && !root.powerPending
               onChanged: function(value) { if (value) root.fanModeRequested(value) }
             }

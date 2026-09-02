@@ -17,6 +17,7 @@ Item {
   property bool actionEnabled: true
   property bool cancelEnabled: true
   property bool compact: false
+  property bool chromeLess: false
   property color foreground: Color.foreground
   property color accent: Color.accent
   property string fontFamily: Style.font.family
@@ -46,7 +47,7 @@ Item {
     foreground: root.isOn ? root.accent : root.foreground
     accent: root.accent
     background: root.isOn ? root.alpha(root.accent, 0.13) : root.alpha(root.foreground, 0.035)
-    bordered: true
+    bordered: !root.chromeLess
     radius: root.panelRadius
     tooltipText: root.isOn ? "Turn off" : "Turn on"
     onClicked: root.powerRequested(root.isOn ? "off" : "on")
@@ -67,7 +68,8 @@ Item {
       height: parent.height
       radius: root.panelRadius
       color: root.alpha(root.accent, 0.12)
-      borderSpec: Border.flat(root.alpha(root.accent, 0.42), 1)
+      borderSpec: root.chromeLess
+        ? Border.none() : Border.flat(root.alpha(root.accent, 0.42), 1)
 
       Row {
         anchors.centerIn: parent
@@ -109,7 +111,7 @@ Item {
       foreground: root.foreground
       accent: root.accent
       background: root.alpha(root.foreground, 0.035)
-      bordered: true
+      bordered: !root.chromeLess
       radius: root.panelRadius
       tooltipText: "Reverse this power request"
       onClicked: root.powerCancelRequested()

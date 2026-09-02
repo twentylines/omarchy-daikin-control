@@ -18,6 +18,7 @@ Item {
   property string fontFamily: Style.font.family
   property var swatches: []
   property bool enabled: true
+  property bool chromeLess: false
 
   signal submitted(string value)
 
@@ -65,7 +66,7 @@ Item {
         foreground: root.foreground
         accent: root.accent
         background: root.valueColor
-        bordered: true
+        bordered: !root.chromeLess
         radius: root.height / 2
         enabled: root.enabled
         tooltipText: "Open the colour picker"
@@ -88,6 +89,17 @@ Item {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         selectByMouse: true
+        background: BorderSurface {
+          color: root.chromeLess
+            ? "transparent" : Style.controlFill(valueField.activeFocus, valueField.hovered,
+                root.foreground, root.accent)
+          borderSpec: root.chromeLess
+            ? Border.none()
+            : Border.controlSpec(valueField.activeFocus
+                ? "focus" : (valueField.hovered ? "hover-cursor" : "normal"),
+                root.foreground, root.accent)
+          radius: Style.cornerRadius
+        }
         onAccepted: root.submitted(text)
       }
 
@@ -133,7 +145,7 @@ Item {
           foreground: modelData
           accent: root.accent
           background: modelData
-          bordered: true
+          bordered: !root.chromeLess
           radius: width / 2
           selected: root.valueText.toUpperCase() === String(modelData).toUpperCase()
           enabled: root.enabled

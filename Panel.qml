@@ -75,6 +75,13 @@ Panel {
   ]
   property bool shortcutsEnabled: false
   property bool shortcutsEnabledPrevious: false
+  property bool configFileModeEnabled: false
+  property bool configFileModeEnabledPrevious: false
+  property string configFileText: ""
+  property string configFilePayload: ""
+  property string configFileStatus: ""
+  property string configFileError: ""
+  property bool configFileBusy: false
   property var shortcutValues: ({
     open_panel: { key: "SUPER+ALT+A", enabled: true },
     toggle_power: { key: "SUPER+ALT+P", enabled: true },
@@ -91,6 +98,8 @@ Panel {
   property bool customAppearanceEnabledPrevious: false
   property bool appearanceAutoAccent: true
   property bool appearanceAutoAccentPrevious: true
+  property bool appearanceAutoBackground: true
+  property bool appearanceAutoBackgroundPrevious: true
   property color customAccentColor: "#8FA79F"
   property color customAccentColorPrevious: "#8FA79F"
   property string customAccentHexText: "#8FA79F"
@@ -99,6 +108,10 @@ Panel {
   property color customControlColorPrevious: "#8FA79F"
   property string customControlHexText: "#8FA79F"
   property string customControlHexTextPrevious: "#8FA79F"
+  property color customBackgroundColor: "#131516"
+  property color customBackgroundColorPrevious: "#131516"
+  property string customBackgroundHexText: "#131516"
+  property string customBackgroundHexTextPrevious: "#131516"
   property bool appearanceDeviceColorsEnabled: false
   property bool appearanceDeviceColorsEnabledPrevious: false
   property var appearanceDeviceColors: ({})
@@ -112,6 +125,8 @@ Panel {
   property real appearanceRadius: 16
   property real appearanceRadiusPrevious: 16
   property string appearanceRadiusText: "16"
+  property bool compactUiEnabled: false
+  property bool compactUiEnabledPrevious: false
   readonly property color accentColor: customAppearanceEnabled && !appearanceAutoAccent
     ? customAccentColor : Color.accent
   // The control colour drives switches, sliders, selected states, and hover
@@ -119,17 +134,22 @@ Panel {
   readonly property color interactionAccentColor: customAppearanceEnabled && !appearanceAutoAccent
     ? customControlColor : Color.accent
   readonly property color controlAccentColor: interactionAccentColor
+  readonly property color appearanceBackgroundColor: customAppearanceEnabled && !appearanceAutoBackground
+    ? customBackgroundColor : Color.popups.background
   readonly property real appearanceSurfaceOpacity: customAppearanceEnabled
     ? Math.max(0, 1 - appearanceTransparency / 100) : 1
   readonly property real appearanceSoftness: customAppearanceEnabled
     ? Math.max(0, Math.min(1, appearanceBlur / 24)) : 0
   // One radius token keeps every plugin surface and control in the same
   // visual language. Circles (status dots, swatches, knobs) remain explicit.
-  readonly property real uiRadius: customAppearanceEnabled
-    ? appearanceRadius : Style.cornerRadius
+  readonly property bool compactChromeEnabled: customAppearanceEnabled && compactUiEnabled
+  readonly property real uiRadius: compactChromeEnabled ? 0 : (customAppearanceEnabled
+    ? appearanceRadius : Style.cornerRadius)
   readonly property real panelRadius: uiRadius
   readonly property real nestedRadius: uiRadius
   readonly property real compactRadius: uiRadius
+  readonly property real uiCardPadding: compactChromeEnabled ? Style.space(10) : Style.space(16)
+  readonly property real uiGroupSpacing: compactChromeEnabled ? Style.space(6) : Style.space(9)
   readonly property bool deviceColorsActive: customAppearanceEnabled
     && !appearanceAutoAccent && appearanceDeviceColorsEnabled
   readonly property int motionFast: 140
@@ -137,7 +157,8 @@ Panel {
   readonly property int motionEmphasis: 300
   readonly property int motionSplash: 520
   readonly property color panelSurface: Qt.rgba(
-    Color.popups.background.r, Color.popups.background.g, Color.popups.background.b,
+    root.appearanceBackgroundColor.r, root.appearanceBackgroundColor.g,
+    root.appearanceBackgroundColor.b,
     root.appearanceSurfaceOpacity)
   property var reading: ({})
   property var entityOptions: []
@@ -263,8 +284,34 @@ Panel {
     "#8FA79F", "#8EA7C7", "#C89AAB", "#D0A66A", "#A99BC7", "#83A6A1",
     "#C28C85", "#89A7B2"
   ]
+  readonly property var appearanceBackgroundPalette: [
+    "#131516", "#1E2224", "#252B2C", "#1D2733", "#272234"
+  ]
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
+
+  function surfaceColor(value) {
+    return root.compactChromeEnabled ? "transparent" : value
+  }
+
+  function surfaceBorder(value) {
+    return root.compactChromeEnabled ? Border.none() : value
+  }
+
+  function controlSurfaceColor(control) {
+    return root.compactChromeEnabled
+      ? "transparent"
+      : Style.controlFill(control.activeFocus, control.hovered,
+          root.foreground, root.controlAccentColor)
+  }
+
+  function controlSurfaceBorder(control) {
+    return root.compactChromeEnabled
+      ? Border.none()
+      : Border.controlSpec(control.activeFocus
+          ? "focus" : (control.hovered ? "hover-cursor" : "normal"),
+          root.foreground, root.controlAccentColor)
+  }
 
   function relativeLuminance(color) {
     function linearChannel(value) {
@@ -287,7 +334,7 @@ Panel {
 
   function contrastingTextColor(surface) {
     var lightText = Color.foreground
-    var darkText = Color.popups.background
+    var darkText = root.appearanceBackgroundColor
     return root.textContrast(surface, lightText) >= root.textContrast(surface, darkText)
       ? lightText : darkText
   }
@@ -332,6 +379,157 @@ Panel {
       }
     }
     return next
+  }
+
+  function configFileDocument() {
+    return {
+      config_version: 1,
+      entity_id: String(selectedEntity || ""),
+      advanced_controls: showClimateControls,
+      master_switch_enabled: masterSwitchEnabled,
+      temperature_display: temperatureDisplay,
+      history_enabled: historyEnabled,
+      history_hours: Number(historyHours),
+      history_custom: historyCustom,
+      history_source: historySource,
+      history_remote_target: String(remoteHistoryTarget || ""),
+      history_remote_port: Number(remoteHistoryPortText || 22),
+      history_remote_url: String(remoteHistoryUrl || remoteHistoryDefaultUrl),
+      history_remote_path: String(remoteHistoryPath || remoteHistoryDefaultPath),
+      multi_unit_enabled: multiUnitEnabled,
+      global_sync_controls: globalSyncControls,
+      sync_non_power_controls: syncNonPowerControls,
+      average_temperature_decimals: averageTemperatureDecimals,
+      temperature_unit: temperatureUnitPreference,
+      selected_entities: Array.isArray(selectedEntities) ? selectedEntities.slice() : [],
+      bar_temperature_mode: barTemperatureMode,
+      bar_temperature_entities: Array.isArray(barTemperatureEntities)
+        ? barTemperatureEntities.slice() : [],
+      experimental_history_enabled: experimentalHistoryEnabled,
+      shortcuts_enabled: shortcutsEnabled,
+      config_file_mode_enabled: configFileModeEnabled,
+      shortcuts: root.copyShortcutValues(),
+      custom_appearance_enabled: customAppearanceEnabled,
+      appearance_auto_accent: appearanceAutoAccent,
+      appearance_auto_background: appearanceAutoBackground,
+      appearance_accent: customAccentHexText,
+      appearance_control: customControlHexText,
+      appearance_background: customBackgroundHexText,
+      appearance_device_colors_enabled: appearanceDeviceColorsEnabled,
+      appearance_device_colors: root.copyAppearanceDeviceColors(),
+      appearance_transparency: Number(appearanceTransparency),
+      appearance_blur: Number(appearanceBlur),
+      appearance_radius: Number(appearanceRadius),
+      appearance_compact: compactUiEnabled,
+    }
+  }
+
+  function refreshConfigFileText() {
+    configFileText = JSON.stringify(root.configFileDocument(), null, 2)
+    if (configFileEditor) configFileEditor.text = configFileText
+  }
+
+  function applyConfigFileState(parsed) {
+    if (!parsed) return
+    if (parsed.entity_id) {
+      selectedEntity = String(parsed.entity_id)
+      setupSelectedEntity = selectedEntity
+    }
+    if (parsed.advanced_controls !== undefined) {
+      showClimateControls = parsed.advanced_controls === true
+      showClimateControlsPrevious = showClimateControls
+    }
+    if (parsed.master_switch_enabled !== undefined) {
+      masterSwitchEnabled = parsed.master_switch_enabled === true
+      masterSwitchEnabledPrevious = masterSwitchEnabled
+    }
+    if (parsed.temperature_display !== undefined) {
+      temperatureDisplay = String(parsed.temperature_display)
+      temperatureDisplayPrevious = temperatureDisplay
+    }
+    if (parsed.history_enabled !== undefined) {
+      historyEnabled = parsed.history_enabled === true
+      historyEnabledPrevious = historyEnabled
+    }
+    if (parsed.history_hours !== undefined) {
+      historyHours = root.normalizeHistoryHours(parsed.history_hours)
+      historyHoursPrevious = historyHours
+      customHistoryHoursText = root.formatHours(historyHours)
+    }
+    if (parsed.history_custom !== undefined) {
+      historyCustom = parsed.history_custom === true
+      historyCustomPrevious = historyCustom
+    }
+    if (parsed.history_source !== undefined) {
+      historySource = String(parsed.history_source) === "server" ? "server" : "local"
+      historySourcePrevious = historySource
+    }
+    if (parsed.history_remote_target !== undefined)
+      remoteHistoryTarget = String(parsed.history_remote_target || "")
+    if (parsed.history_remote_port !== undefined)
+      remoteHistoryPortText = String(parsed.history_remote_port || "22")
+    if (parsed.history_remote_url !== undefined)
+      remoteHistoryUrl = String(parsed.history_remote_url || root.remoteHistoryDefaultUrl)
+    if (parsed.history_remote_path !== undefined)
+      remoteHistoryPath = String(parsed.history_remote_path || root.remoteHistoryDefaultPath)
+    remoteHistoryPairingSaved = String(remoteHistoryTarget || "").trim() !== ""
+    root.applyExperimentalValues(parsed)
+  }
+
+  function applyConfigFile() {
+    if (configFileBusy || preferenceBusy) return
+    var text = String(configFileText || "").trim()
+    if (text === "") {
+      configFileError = "The config file cannot be empty."
+      configFileStatus = ""
+      return
+    }
+    try {
+      var payload = JSON.parse(text)
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        configFileError = "The config file must contain a JSON object."
+        configFileStatus = ""
+        return
+      }
+    } catch (error) {
+      configFileError = "Fix the JSON syntax before applying the config file."
+      configFileStatus = ""
+      return
+    }
+    configFileError = ""
+    configFileStatus = "Saving preferences…"
+    configFilePayload = text
+    configFileBusy = true
+    configFileProcess.command = ["python3", root.helperPath, "set-config-file"]
+    configFileProcess.running = true
+  }
+
+  function applyConfigFileResult(raw) {
+    var text = String(raw || "").trim()
+    if (text === "") {
+      configFileError = "The config file could not be saved."
+      configFileStatus = ""
+      return
+    }
+    try {
+      var parsed = JSON.parse(text)
+      if (parsed && parsed.ok === true && parsed.config_file_saved === true) {
+        root.applyConfigFileState(parsed)
+        configFileError = ""
+        configFileStatus = parsed.shortcut_sync_error
+          ? "Saved, but keyboard bindings need attention."
+          : "Saved. Ctrl+Enter applies the JSON; settings stay available below."
+        root.refreshConfigFileText()
+        Qt.callLater(root.refresh)
+        return
+      }
+      configFileError = parsed && parsed.error
+        ? String(parsed.error) : "The config file could not be saved."
+      configFileStatus = ""
+    } catch (error) {
+      configFileError = "The config file helper returned invalid data."
+      configFileStatus = ""
+    }
   }
 
   function normalizeShortcutKey(value, fallback) {
@@ -1418,6 +1616,8 @@ Panel {
     experimentalHistoryEnabledPrevious = experimentalHistoryEnabled
     shortcutsEnabled = parsed.shortcuts_enabled === true
     shortcutsEnabledPrevious = shortcutsEnabled
+    configFileModeEnabled = parsed.config_file_mode_enabled === true
+    configFileModeEnabledPrevious = configFileModeEnabled
     shortcutValues = normalizeShortcutValues(parsed.shortcuts)
     shortcutValuesPrevious = copyShortcutValues(shortcutValues)
     if (!shortcutsEnabled && settingsSection === "shortcuts") settingsSection = "experimental"
@@ -1426,6 +1626,8 @@ Panel {
     customAppearanceEnabledPrevious = customAppearanceEnabled
     appearanceAutoAccent = parsed.appearance_auto_accent !== false
     appearanceAutoAccentPrevious = appearanceAutoAccent
+    appearanceAutoBackground = parsed.appearance_auto_background !== false
+    appearanceAutoBackgroundPrevious = appearanceAutoBackground
     customAccentHexText = String(parsed.appearance_accent || "#8FA79F")
     customAccentHexTextPrevious = customAccentHexText
     customAccentColor = customAccentHexText
@@ -1434,6 +1636,10 @@ Panel {
     customControlHexTextPrevious = customControlHexText
     customControlColor = customControlHexText
     customControlColorPrevious = customControlColor
+    customBackgroundHexText = String(parsed.appearance_background || "#131516")
+    customBackgroundHexTextPrevious = customBackgroundHexText
+    customBackgroundColor = customBackgroundHexText
+    customBackgroundColorPrevious = customBackgroundColor
     appearanceDeviceColorsEnabled = parsed.appearance_device_colors_enabled === true
     appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
     appearanceDeviceColors = normalizeAppearanceDeviceColors(parsed.appearance_device_colors)
@@ -1447,6 +1653,8 @@ Panel {
     appearanceRadius = Math.max(8, Math.min(32, Number(parsed.appearance_radius) || 16))
     appearanceRadiusPrevious = appearanceRadius
     appearanceRadiusText = formatAppearanceValue(appearanceRadius)
+    compactUiEnabled = parsed.appearance_compact === true
+    compactUiEnabledPrevious = compactUiEnabled
   }
 
   function formatAppearanceValue(value) {
@@ -1532,7 +1740,7 @@ Panel {
   function refreshStatus() {
     if (statusProcess.running || actionProcess.running || setupProcess.running
         || preferenceProcess.running || remoteHistoryProcess.running
-        || turnOffAllProcess.running || turnOnAllProcess.running) return false
+        || configFileProcess.running || turnOffAllProcess.running || turnOnAllProcess.running) return false
     statusProcess.command = ["python3", root.helperPath, "status"]
     statusProcess.running = true
     return true
@@ -2235,6 +2443,13 @@ Panel {
         experimentalHistoryEnabledPrevious = false
         shortcutsEnabled = false
         shortcutsEnabledPrevious = false
+        configFileModeEnabled = false
+        configFileModeEnabledPrevious = false
+        configFileText = ""
+        configFilePayload = ""
+        configFileStatus = ""
+        configFileError = ""
+        configFileBusy = false
         shortcutValues = normalizeShortcutValues(shortcutDefaults)
         shortcutValuesPrevious = copyShortcutValues(shortcutValues)
         shortcutCaptureId = ""
@@ -2242,10 +2457,16 @@ Panel {
         customAppearanceEnabledPrevious = false
         appearanceAutoAccent = true
         appearanceAutoAccentPrevious = true
+        appearanceAutoBackground = true
+        appearanceAutoBackgroundPrevious = true
         customAccentColor = "#8FA79F"
         customAccentColorPrevious = "#8FA79F"
         customAccentHexText = "#8FA79F"
         customAccentHexTextPrevious = "#8FA79F"
+        customBackgroundColor = "#131516"
+        customBackgroundColorPrevious = "#131516"
+        customBackgroundHexText = "#131516"
+        customBackgroundHexTextPrevious = "#131516"
         appearanceTransparency = 0
         appearanceTransparencyPrevious = 0
         appearanceTransparencyText = "0"
@@ -2255,6 +2476,8 @@ Panel {
         appearanceRadius = 16
         appearanceRadiusPrevious = 16
         appearanceRadiusText = "16"
+        compactUiEnabled = false
+        compactUiEnabledPrevious = false
         remoteHistoryTarget = ""
         remoteHistoryPortText = "22"
         remoteHistoryUrl = root.remoteHistoryDefaultUrl
@@ -3016,6 +3239,23 @@ Panel {
     root.beginPreference("shortcuts_enabled", next ? "on" : "off")
   }
 
+  function setConfigFileModeEnabled(value) {
+    if (preferenceProcess.running || configFileBusy) return
+    var next = value === true
+    if (next === configFileModeEnabled) return
+    configFileModeEnabledPrevious = configFileModeEnabled
+    configFileModeEnabled = next
+    configFileError = ""
+    configFileStatus = ""
+    if (next) {
+      root.refreshConfigFileText()
+      Qt.callLater(function() {
+        if (root.configFileModeEnabled && configFileEditor) configFileEditor.forceActiveFocus()
+      })
+    }
+    root.beginPreference("config_file_mode_enabled", next ? "on" : "off")
+  }
+
   function setShortcutEnabled(name, value) {
     if (preferenceProcess.running || !shortcutDefaults[name]) return
     var next = value === true
@@ -3072,6 +3312,15 @@ Panel {
     root.beginPreference("appearance_auto_accent", next ? "on" : "off")
   }
 
+  function setAppearanceAutoBackground(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === appearanceAutoBackground) return
+    appearanceAutoBackgroundPrevious = appearanceAutoBackground
+    appearanceAutoBackground = next
+    root.beginPreference("appearance_auto_background", next ? "on" : "off")
+  }
+
   function setAppearanceDeviceColorsEnabled(value) {
     if (preferenceProcess.running) return
     var next = value === true
@@ -3108,6 +3357,11 @@ Panel {
       customControlColorPrevious = customControlColor
       customControlHexText = next
       customControlColor = next
+    } else if (name === "appearance_background") {
+      customBackgroundHexTextPrevious = customBackgroundHexText
+      customBackgroundColorPrevious = customBackgroundColor
+      customBackgroundHexText = next
+      customBackgroundColor = next
     } else {
       return
     }
@@ -3158,6 +3412,15 @@ Panel {
       appearanceRadiusText = formatAppearanceValue(next)
     }
     root.beginPreference(name, formatAppearanceValue(next))
+  }
+
+  function setCompactUiEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === compactUiEnabled) return
+    compactUiEnabledPrevious = compactUiEnabled
+    compactUiEnabled = next
+    root.beginPreference("appearance_compact", next ? "on" : "off")
   }
 
   function setHistoryRange(value, custom, force) {
@@ -3234,6 +3497,8 @@ Panel {
     else if (kind === "experimental_history_enabled")
       experimentalHistoryEnabled = experimentalHistoryEnabledPrevious
     else if (kind === "shortcuts_enabled") shortcutsEnabled = shortcutsEnabledPrevious
+    else if (kind === "config_file_mode_enabled")
+      configFileModeEnabled = configFileModeEnabledPrevious
     else if (kind === "reset_shortcuts")
       shortcutValues = copyShortcutValues(shortcutValuesPrevious)
     else if (kind.indexOf("shortcut_enabled_") === 0
@@ -3241,12 +3506,17 @@ Panel {
       shortcutValues = copyShortcutValues(shortcutValuesPrevious)
     else if (kind === "custom_appearance_enabled") customAppearanceEnabled = customAppearanceEnabledPrevious
     else if (kind === "appearance_auto_accent") appearanceAutoAccent = appearanceAutoAccentPrevious
+    else if (kind === "appearance_auto_background")
+      appearanceAutoBackground = appearanceAutoBackgroundPrevious
     else if (kind === "appearance_accent") {
       customAccentHexText = customAccentHexTextPrevious
       customAccentColor = customAccentColorPrevious
     } else if (kind === "appearance_control") {
       customControlHexText = customControlHexTextPrevious
       customControlColor = customControlColorPrevious
+    } else if (kind === "appearance_background") {
+      customBackgroundHexText = customBackgroundHexTextPrevious
+      customBackgroundColor = customBackgroundColorPrevious
     } else if (kind === "appearance_device_colors_enabled") {
       appearanceDeviceColorsEnabled = appearanceDeviceColorsEnabledPrevious
     } else if (kind === "appearance_device_colors") {
@@ -3260,6 +3530,8 @@ Panel {
     } else if (kind === "appearance_radius") {
       appearanceRadius = appearanceRadiusPrevious
       appearanceRadiusText = formatAppearanceValue(appearanceRadius)
+    } else if (kind === "appearance_compact") {
+      compactUiEnabled = compactUiEnabledPrevious
     }
   }
 
@@ -3293,6 +3565,9 @@ Panel {
     } else if (name === "shortcuts_enabled") {
       shortcutsEnabled = value === true
       shortcutsEnabledPrevious = shortcutsEnabled
+    } else if (name === "config_file_mode_enabled") {
+      configFileModeEnabled = value === true
+      configFileModeEnabledPrevious = configFileModeEnabled
     } else if (name.indexOf("shortcut_enabled_") === 0) {
       var enabledShortcutName = name.slice("shortcut_enabled_".length)
       if (!shortcutDefaults[enabledShortcutName]) return false
@@ -3314,6 +3589,9 @@ Panel {
     } else if (name === "appearance_auto_accent") {
       appearanceAutoAccent = value === true
       appearanceAutoAccentPrevious = appearanceAutoAccent
+    } else if (name === "appearance_auto_background") {
+      appearanceAutoBackground = value === true
+      appearanceAutoBackgroundPrevious = appearanceAutoBackground
     } else if (name === "appearance_accent") {
       customAccentHexText = String(value || customAccentHexText)
       customAccentColor = customAccentHexText
@@ -3324,6 +3602,11 @@ Panel {
       customControlColor = customControlHexText
       customControlHexTextPrevious = customControlHexText
       customControlColorPrevious = customControlColor
+    } else if (name === "appearance_background") {
+      customBackgroundHexText = String(value || customBackgroundHexText)
+      customBackgroundColor = customBackgroundHexText
+      customBackgroundHexTextPrevious = customBackgroundHexText
+      customBackgroundColorPrevious = customBackgroundColor
     } else if (name === "appearance_device_colors_enabled") {
       appearanceDeviceColorsEnabled = value === true
       appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
@@ -3342,6 +3625,9 @@ Panel {
       appearanceRadius = Number(value)
       appearanceRadiusPrevious = appearanceRadius
       appearanceRadiusText = formatAppearanceValue(appearanceRadius)
+    } else if (name === "appearance_compact") {
+      compactUiEnabled = value === true
+      compactUiEnabledPrevious = compactUiEnabled
     } else {
       return false
     }
@@ -3369,6 +3655,8 @@ Panel {
           customAppearanceEnabledPrevious = customAppearanceEnabled
           appearanceAutoAccent = parsed.appearance_auto_accent !== false
           appearanceAutoAccentPrevious = appearanceAutoAccent
+          appearanceAutoBackground = parsed.appearance_auto_background !== false
+          appearanceAutoBackgroundPrevious = appearanceAutoBackground
           customAccentHexText = String(parsed.appearance_accent || "#8FA79F")
           customAccentHexTextPrevious = customAccentHexText
           customAccentColor = customAccentHexText
@@ -3377,6 +3665,10 @@ Panel {
           customControlHexTextPrevious = customControlHexText
           customControlColor = customControlHexText
           customControlColorPrevious = customControlColor
+          customBackgroundHexText = String(parsed.appearance_background || "#131516")
+          customBackgroundHexTextPrevious = customBackgroundHexText
+          customBackgroundColor = customBackgroundHexText
+          customBackgroundColorPrevious = customBackgroundColor
           appearanceDeviceColorsEnabled = parsed.appearance_device_colors_enabled === true
           appearanceDeviceColorsEnabledPrevious = appearanceDeviceColorsEnabled
           appearanceDeviceColors = normalizeAppearanceDeviceColors(parsed.appearance_device_colors)
@@ -3390,6 +3682,8 @@ Panel {
           appearanceRadius = Math.max(8, Math.min(32, Number(parsed.appearance_radius) || 16))
           appearanceRadiusPrevious = appearanceRadius
           appearanceRadiusText = formatAppearanceValue(appearanceRadius)
+          compactUiEnabled = parsed.appearance_compact === true
+          compactUiEnabledPrevious = compactUiEnabled
           setupError = ""
           return
         } else if (parsed.preference === "advanced_controls" && parsed.value !== undefined) {
@@ -3616,6 +3910,24 @@ Panel {
       root.preferenceKind = ""
       if (completedPreference === "history_source") Qt.callLater(root.refresh)
     }
+  }
+
+  Process {
+    id: configFileProcess
+    stdinEnabled: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyConfigFileResult(text)
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text || "").trim() !== "") console.warn("aircon-control config", text.trim())
+    }
+    onStarted: {
+      write(root.configFilePayload + "\n")
+      root.configFilePayload = ""
+    }
+    onExited: root.configFileBusy = false
   }
 
   Process {
@@ -4139,7 +4451,9 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(root.setupOpen
-      ? (root.configured ? Style.space(600) : Style.space(520))
+      ? (root.configured
+        ? (root.configFileModeEnabled ? Style.space(680) : Style.space(600))
+        : Style.space(520))
       : (root.separateRemotesActive ? Style.space(620) : Style.space(360)))
     contentHeight: panel.fittedContentHeight(root.setupOpen
       ? onboardingColumn.implicitHeight : column.implicitHeight)
@@ -4175,7 +4489,8 @@ Panel {
         || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
         || reconnectEntityDropdown.popupOpen
         || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
-        || remoteHistoryUrlField.activeFocus || root.shortcutCaptureActive)
+        || remoteHistoryUrlField.activeFocus || configFileEditor.activeFocus
+        || root.shortcutCaptureActive)
       onCloseRequested: {
         if (root.setupOpen && root.configured) {
           if (!root.shortcutsEnabled || root.shortcutEnabled("settings_back")) root.cancelSetup()
@@ -4215,15 +4530,15 @@ Panel {
         id: onboardingColumn
         visible: root.setupOpen
         width: parent.width
-        spacing: Style.space(10)
+        spacing: root.compactChromeEnabled ? Style.space(6) : Style.space(10)
 
         BorderSurface {
           id: setupHero
           width: parent.width
           height: Style.space(94)
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.035)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.16), 1)
+          color: root.surfaceColor(root.alpha(root.foreground, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.16), 1))
 
           Column {
             anchors.centerIn: parent
@@ -4260,8 +4575,8 @@ Panel {
           width: parent.width
           implicitHeight: settingsNavigationForm.implicitHeight + Style.space(20)
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.025)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.14), 1)
+          color: root.surfaceColor(root.alpha(root.foreground, 0.025))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.14), 1))
 
           Column {
             id: settingsNavigationForm
@@ -4286,7 +4601,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.accentColor, 0.08)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               tooltipText: "Return to the AC controls"
               onClicked: root.cancelSetup()
@@ -4302,8 +4617,23 @@ Panel {
               font.letterSpacing: 0.8
             }
 
+            ChromeToggle {
+              id: configFileModeToggle
+              width: parent.width
+              label: "CONFIG FILE MODE"
+              description: "Replace the setting cards with a keyboard-first JSON editor. Secrets stay hidden."
+              checked: root.configFileModeEnabled
+              enabled: !root.preferenceBusy && !root.configFileBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
+              onClicked: root.setConfigFileModeEnabled(!root.configFileModeEnabled)
+            }
+
             Row {
               id: settingsSectionChoices
+              visible: !root.configFileModeEnabled
               width: parent.width
               spacing: Style.space(6)
 
@@ -4322,10 +4652,180 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   background: root.alpha(root.foreground, 0.025)
-                  bordered: true
+                  bordered: !root.compactChromeEnabled
                   selected: root.settingsSection === modelData.value
                   radius: root.compactRadius
                   onClicked: root.settingsSection = modelData.value
+                }
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          id: configFileCard
+          visible: root.configured && root.configFileModeEnabled
+          width: parent.width
+          implicitHeight: configFileForm.implicitHeight + Style.space(28)
+          radius: root.panelRadius
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
+
+          Column {
+            id: configFileForm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(14)
+            spacing: Style.space(8)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Column {
+                width: parent.width - configFileHint.implicitWidth - parent.spacing
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: "KEYBOARD CONFIG"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+
+                Text {
+                  width: parent.width
+                  text: "PREFERENCES JSON · TOKEN HIDDEN"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.7
+                }
+              }
+
+              Text {
+                id: configFileHint
+                text: "CTRL+ENTER"
+                color: root.accentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                verticalAlignment: Text.AlignVCenter
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Edit the settings document below and press Ctrl+Enter to apply. The saved Home Assistant connection URL and token stay protected and are never shown here."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            TextArea {
+              id: configFileEditor
+              width: parent.width
+              height: Style.space(420)
+              text: root.configFileText
+              enabled: !root.configFileBusy
+              color: root.foreground
+              selectionColor: root.alpha(root.controlAccentColor, 0.36)
+              selectedTextColor: root.foreground
+              font.family: "monospace"
+              font.pixelSize: Style.font.caption
+              padding: Style.space(10)
+              selectByMouse: true
+              persistentSelection: true
+              wrapMode: TextEdit.NoWrap
+              activeFocusOnTab: true
+              background: Rectangle {
+                color: root.alpha(root.appearanceBackgroundColor, 0.88)
+                radius: root.compactRadius
+                border.color: configFileEditor.activeFocus
+                  ? root.controlAccentColor : root.alpha(root.foreground, 0.12)
+                border.width: 1
+              }
+              onTextChanged: {
+                if (text !== root.configFileText) root.configFileText = text
+                if (!root.configFileBusy) root.configFileStatus = ""
+              }
+              Keys.onEscapePressed: function(event) {
+                event.accepted = true
+                root.setConfigFileModeEnabled(false)
+              }
+              Keys.onPressed: function(event) {
+                if ((event.modifiers & Qt.ControlModifier) !== 0
+                    && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                  event.accepted = true
+                  root.applyConfigFile()
+                }
+              }
+            }
+
+            Text {
+              visible: root.configFileStatus !== ""
+              width: parent.width
+              text: root.configFileStatus
+              color: root.accentColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              visible: root.configFileError !== ""
+              width: parent.width
+              text: root.configFileError
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                width: parent.width - configFileReloadButton.width - parent.spacing
+                height: Style.space(38)
+                text: root.configFileBusy ? "APPLYING…" : "APPLY CONFIG"
+                iconText: root.configFileBusy ? "" : "✓"
+                iconSize: Style.font.body
+                fontSize: Style.font.bodySmall
+                enabled: !root.configFileBusy && !root.preferenceBusy
+                fontFamily: root.fontFamily
+                foreground: Color.popups.background
+                accent: root.controlAccentColor
+                background: root.accentColor
+                bordered: false
+                radius: root.compactRadius
+                onClicked: root.applyConfigFile()
+              }
+
+              Button {
+                id: configFileReloadButton
+                width: Style.space(102)
+                height: Style.space(38)
+                text: "RELOAD"
+                fontSize: Style.font.caption
+                enabled: !root.configFileBusy && !root.preferenceBusy
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                background: root.alpha(root.foreground, 0.025)
+                bordered: !root.compactChromeEnabled
+                radius: root.compactRadius
+                tooltipText: "Discard edits and reload the current settings"
+                onClicked: {
+                  root.configFileError = ""
+                  root.configFileStatus = ""
+                  root.refreshConfigFileText()
                 }
               }
             }
@@ -4338,8 +4838,8 @@ Panel {
           width: parent.width
           implicitHeight: setupForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.035)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.16), 1)
+          color: root.surfaceColor(root.alpha(root.foreground, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.16), 1))
 
           Column {
             id: setupForm
@@ -4404,6 +4904,11 @@ Panel {
               font.family: root.fontFamily
               inputMethodHints: Qt.ImhUrlCharactersOnly
               selectByMouse: true
+              background: BorderSurface {
+                color: root.controlSurfaceColor(setupUrlField)
+                borderSpec: root.controlSurfaceBorder(setupUrlField)
+                radius: root.compactRadius
+              }
               onTextChanged: if (text !== root.setupUrl) root.setupUrl = text
               onAccepted: setupTokenField.forceActiveFocus()
               Keys.onEscapePressed: if (root.configured) root.cancelSetup()
@@ -4440,6 +4945,11 @@ Panel {
               accent: root.controlAccentColor
               font.family: root.fontFamily
               selectByMouse: true
+              background: BorderSurface {
+                color: root.controlSurfaceColor(setupTokenField)
+                borderSpec: root.controlSurfaceBorder(setupTokenField)
+                radius: root.compactRadius
+              }
               onTextChanged: if (text !== root.setupToken) root.setupToken = text
               onAccepted: root.submitSetup()
               Keys.onEscapePressed: if (root.configured) root.cancelSetup()
@@ -4462,11 +4972,12 @@ Panel {
               options: root.setupDropdownOptions
               value: root.setupSelectedEntity
               foreground: root.foreground
-              background: Color.popups.background
+              background: root.appearanceBackgroundColor
               popupBorder: Color.popups.border
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
               controlRadius: root.compactRadius
+              chromeLess: root.compactChromeEnabled
               onChanged: function(value) { root.setupSelectedEntity = value }
             }
 
@@ -4474,8 +4985,8 @@ Panel {
               visible: root.setupError !== ""
               width: parent.width
               implicitHeight: setupMessage.implicitHeight + Style.space(18)
-              color: root.alpha(root.setupEntityOptions.length > 0 ? root.accentColor : root.urgent, 0.09)
-              borderSpec: Border.flat(root.alpha(root.setupEntityOptions.length > 0 ? root.accentColor : root.urgent, 0.32), 1)
+              color: root.surfaceColor(root.alpha(root.setupEntityOptions.length > 0 ? root.accentColor : root.urgent, 0.09))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.setupEntityOptions.length > 0 ? root.accentColor : root.urgent, 0.32), 1))
               radius: root.compactRadius
 
               Text {
@@ -4499,8 +5010,8 @@ Panel {
               width: parent.width
               implicitHeight: onboardingControlsForm.implicitHeight + Style.space(24)
               radius: root.compactRadius
-              color: root.alpha(root.accentColor, 0.045)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.22), 1)
+              color: root.surfaceColor(root.alpha(root.accentColor, 0.045))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.22), 1))
 
               Column {
                 id: onboardingControlsForm
@@ -4550,7 +5061,7 @@ Panel {
                   }
                 }
 
-                Toggle {
+                ChromeToggle {
                   width: parent.width
                   label: "Show climate controls"
                   description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
@@ -4559,10 +5070,11 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
+                  chromeLess: root.compactChromeEnabled
                   onClicked: root.showClimateControls = !root.showClimateControls
                 }
 
-                Toggle {
+                ChromeToggle {
                   width: parent.width
                   label: "MasterSwitch"
                   description: "One guarded power button turns every available AC on or off, independently of climate controls."
@@ -4571,6 +5083,7 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
+                  chromeLess: root.compactChromeEnabled
                   onClicked: root.masterSwitchEnabled = !root.masterSwitchEnabled
                 }
 
@@ -4581,8 +5094,8 @@ Panel {
                   height: root.masterSwitchEnabled ? implicitHeight : 0
                   opacity: root.masterSwitchEnabled ? 1 : 0
                   clip: true
-                  color: root.alpha(root.urgent, 0.07)
-                  borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                  color: root.surfaceColor(root.alpha(root.urgent, 0.07))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.25), 1))
                   radius: root.compactRadius
 
                   Behavior on height {
@@ -4650,7 +5163,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               tooltipText: "Open the Home Assistant address used by this widget"
               onClicked: root.openHomeAssistantSettings()
@@ -4676,8 +5189,8 @@ Panel {
           width: parent.width
           implicitHeight: localServerForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: localServerForm
@@ -4729,8 +5242,8 @@ Panel {
             BorderSurface {
               width: parent.width
               implicitHeight: localServerDetails.implicitHeight + Style.space(18)
-              color: root.alpha(root.foreground, 0.025)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+              color: root.surfaceColor(root.alpha(root.foreground, 0.025))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.11), 1))
               radius: root.compactRadius
 
               Text {
@@ -4764,8 +5277,8 @@ Panel {
               height: root.localServerConfirming ? implicitHeight : 0
               opacity: root.localServerConfirming ? 1 : 0
               clip: true
-              color: root.alpha(root.accentColor, 0.08)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.30), 1)
+              color: root.surfaceColor(root.alpha(root.accentColor, 0.08))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.30), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -4813,6 +5326,7 @@ Panel {
                 backTextColor: root.foreground
                 backBackground: root.alpha(root.foreground, 0.025)
                 controlRadius: root.compactRadius
+                chromeLess: root.compactChromeEnabled
                 fontFamily: root.fontFamily
                 confirming: root.localServerConfirming
                 busy: root.localServerBusy
@@ -4832,7 +5346,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.025)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
                 tooltipText: root.homeAssistantLinuxGuideUrl
                 enabled: !root.localServerBusy && !root.localServerConfirming
@@ -4849,8 +5363,8 @@ Panel {
               height: hasLocalServerStatus ? implicitHeight : 0
               opacity: hasLocalServerStatus ? 1 : 0
               clip: true
-              color: root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.09)
-              borderSpec: Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.32), 1)
+              color: root.surfaceColor(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.09))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.32), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -4880,12 +5394,13 @@ Panel {
 
         BorderSurface {
           id: advancedSettingsCard
-          visible: root.configured && root.settingsSection === "preferences"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "preferences"
           width: parent.width
           implicitHeight: advancedSettingsForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: advancedSettingsForm
@@ -4913,7 +5428,7 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Toggle {
+            ChromeToggle {
               width: parent.width
               label: "Show climate controls"
               description: "Show mode, fan-speed, and per-AC temperature controls in the panel."
@@ -4922,6 +5437,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setShowClimateControlsEnabled(!root.showClimateControls)
             }
 
@@ -4929,8 +5445,8 @@ Panel {
               id: barTemperaturesSettingsCard
               width: parent.width
               implicitHeight: barTemperaturesSettingsForm.implicitHeight + Style.space(20)
-              color: root.alpha(root.foreground, 0.018)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              color: root.surfaceColor(root.alpha(root.foreground, 0.018))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.10), 1))
               radius: root.compactRadius
 
               Column {
@@ -4983,7 +5499,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       selected: root.temperatureDisplay === modelData.value
                       enabled: !root.preferenceBusy
                       radius: root.compactRadius
@@ -4999,8 +5515,8 @@ Panel {
               id: temperatureUnitSettingsCard
               width: parent.width
               implicitHeight: temperatureUnitSettingsForm.implicitHeight + Style.space(20)
-              color: root.alpha(root.foreground, 0.018)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              color: root.surfaceColor(root.alpha(root.foreground, 0.018))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.10), 1))
               radius: root.compactRadius
 
               Column {
@@ -5055,7 +5571,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       selected: root.displayTemperatureUnitCode === modelData.value
                       enabled: !root.preferenceBusy
                       radius: root.compactRadius
@@ -5071,8 +5587,8 @@ Panel {
               id: historySettingsGroup
               width: parent.width
               implicitHeight: historySettingsGroupForm.implicitHeight + Style.space(20)
-              color: root.alpha(root.foreground, 0.018)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              color: root.surfaceColor(root.alpha(root.foreground, 0.018))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.10), 1))
               radius: root.compactRadius
 
               Column {
@@ -5093,7 +5609,7 @@ Panel {
                   font.letterSpacing: 0.8
                 }
 
-                Toggle {
+                ChromeToggle {
                   width: parent.width
                   label: "Ambient temperature chart"
                   description: "Show the recorded ambient temperature history in the main panel."
@@ -5102,6 +5618,7 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
+                  chromeLess: root.compactChromeEnabled
                   onClicked: root.setHistoryEnabled(!root.historyEnabled)
                 }
 
@@ -5109,8 +5626,8 @@ Panel {
                   id: historySourceSettingsCard
                   width: parent.width
                   implicitHeight: historySourceSettingsForm.implicitHeight + Style.space(20)
-                  color: root.alpha(root.foreground, 0.012)
-                  borderSpec: Border.flat(root.alpha(root.foreground, 0.06), 1)
+                  color: root.surfaceColor(root.alpha(root.foreground, 0.012))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.06), 1))
                   radius: root.compactRadius
 
                   Column {
@@ -5154,7 +5671,7 @@ Panel {
                         foreground: root.foreground
                         accent: root.controlAccentColor
                         background: root.alpha(root.foreground, 0.025)
-                        bordered: true
+                        bordered: !root.compactChromeEnabled
                         selected: root.historySource === "local"
                         enabled: !root.preferenceBusy
                         radius: root.compactRadius
@@ -5171,7 +5688,7 @@ Panel {
                         foreground: root.foreground
                         accent: root.controlAccentColor
                         background: root.alpha(root.foreground, 0.025)
-                        bordered: true
+                        bordered: !root.compactChromeEnabled
                         selected: root.historySource === "server"
                         enabled: !root.preferenceBusy
                         radius: root.compactRadius
@@ -5203,8 +5720,8 @@ Panel {
                   ? remoteHistoryPairedSummary.implicitHeight : remoteHistoryForm.implicitHeight)
                   + Style.space(24)
                 radius: root.compactRadius
-                color: root.alpha(root.accentColor, 0.045)
-                borderSpec: Border.flat(root.alpha(root.accentColor, 0.24), 1)
+                color: root.surfaceColor(root.alpha(root.accentColor, 0.045))
+                borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.24), 1))
 
                 Behavior on implicitHeight {
                   NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
@@ -5288,8 +5805,8 @@ Panel {
                   BorderSurface {
                     width: parent.width
                     implicitHeight: remoteHistoryPairedTarget.implicitHeight + Style.space(16)
-                    color: root.alpha(root.accentColor, 0.07)
-                    borderSpec: Border.flat(root.alpha(root.accentColor, 0.24), 1)
+                    color: root.surfaceColor(root.alpha(root.accentColor, 0.07))
+                    borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.24), 1))
                     radius: root.compactRadius
 
                     Text {
@@ -5316,7 +5833,7 @@ Panel {
                     foreground: root.foreground
                     accent: root.controlAccentColor
                     background: root.alpha(root.foreground, 0.025)
-                    bordered: true
+                    bordered: !root.compactChromeEnabled
                     radius: root.compactRadius
                     enabled: !root.remoteHistoryBusy && !root.preferenceBusy
                     tooltipText: "Edit the external server connection"
@@ -5388,8 +5905,8 @@ Panel {
                   BorderSurface {
                     width: parent.width
                     implicitHeight: remoteHistorySafetyText.implicitHeight + Style.space(18)
-                    color: root.alpha(root.foreground, 0.025)
-                    borderSpec: Border.flat(root.alpha(root.foreground, 0.12), 1)
+                    color: root.surfaceColor(root.alpha(root.foreground, 0.025))
+                    borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.12), 1))
                     radius: root.compactRadius
 
                     Text {
@@ -5437,6 +5954,11 @@ Panel {
                         accent: root.controlAccentColor
                         font.family: root.fontFamily
                         selectByMouse: true
+                        background: BorderSurface {
+                          color: root.controlSurfaceColor(remoteHistoryTargetField)
+                          borderSpec: root.controlSurfaceBorder(remoteHistoryTargetField)
+                          radius: root.compactRadius
+                        }
                         onTextChanged: if (text !== root.remoteHistoryTarget)
                           root.remoteHistoryTarget = text
                       }
@@ -5469,6 +5991,11 @@ Panel {
                         font.family: root.fontFamily
                         inputMethodHints: Qt.ImhFormattedNumbersOnly
                         selectByMouse: true
+                        background: BorderSurface {
+                          color: root.controlSurfaceColor(remoteHistoryPortField)
+                          borderSpec: root.controlSurfaceBorder(remoteHistoryPortField)
+                          radius: root.compactRadius
+                        }
                         onTextChanged: if (text !== root.remoteHistoryPortText)
                           root.remoteHistoryPortText = text
                       }
@@ -5497,6 +6024,11 @@ Panel {
                     font.family: root.fontFamily
                     inputMethodHints: Qt.ImhUrlCharactersOnly
                     selectByMouse: true
+                    background: BorderSurface {
+                      color: root.controlSurfaceColor(remoteHistoryUrlField)
+                      borderSpec: root.controlSurfaceBorder(remoteHistoryUrlField)
+                      radius: root.compactRadius
+                    }
                     onTextChanged: if (text !== root.remoteHistoryUrl)
                       root.remoteHistoryUrl = text
                   }
@@ -5560,7 +6092,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.06)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       enabled: !root.remoteHistoryBusy
                         && !root.remoteHistorySourceBusy && !root.preferenceBusy
@@ -5590,7 +6122,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       enabled: !root.remoteHistoryBusy && !root.preferenceBusy
                       tooltipText: "Keep the current external-server pairing"
@@ -5615,7 +6147,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       tooltipText: "Open the external-server setup guide on GitHub"
                       enabled: !root.remoteHistoryBusy && !root.remoteHistorySourceBusy
@@ -5638,7 +6170,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       tooltipText: "Copy all reviewable external-server and uninstall source files"
                       enabled: !root.remoteHistoryBusy && !root.remoteHistorySourceBusy
@@ -5650,9 +6182,9 @@ Panel {
                     visible: root.remoteHistoryMessage !== "" || root.remoteHistoryError !== ""
                     width: parent.width
                     implicitHeight: remoteHistoryStatus.implicitHeight + Style.space(16)
-                    color: root.alpha(root.remoteHistoryError !== "" ? root.urgent : root.accentColor, 0.08)
-                    borderSpec: Border.flat(root.alpha(
-                      root.remoteHistoryError !== "" ? root.urgent : root.accentColor, 0.28), 1)
+                    color: root.surfaceColor(root.alpha(root.remoteHistoryError !== "" ? root.urgent : root.accentColor, 0.08))
+                    borderSpec: root.surfaceBorder(Border.flat(root.alpha(
+                      root.remoteHistoryError !== "" ? root.urgent : root.accentColor, 0.28), 1))
                     radius: root.compactRadius
 
                     Text {
@@ -5686,8 +6218,8 @@ Panel {
               height: historyVisible ? implicitHeight : 0
               opacity: historyVisible ? 1 : 0
               clip: true
-              color: root.alpha(root.foreground, 0.012)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.06), 1)
+              color: root.surfaceColor(root.alpha(root.foreground, 0.012))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.06), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -5735,7 +6267,7 @@ Panel {
                     foreground: root.foreground
                     accent: root.controlAccentColor
                     background: root.alpha(root.foreground, 0.025)
-                    bordered: true
+                    bordered: !root.compactChromeEnabled
                     selected: modelData.value === "custom"
                       ? root.historyCustom
                       : !root.historyCustom && root.historyHours === Number(modelData.value)
@@ -5776,6 +6308,11 @@ Panel {
                   font.family: root.fontFamily
                   inputMethodHints: Qt.ImhFormattedNumbersOnly
                   selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(customHistoryHoursField)
+                    borderSpec: root.controlSurfaceBorder(customHistoryHoursField)
+                    radius: root.compactRadius
+                  }
                   onTextChanged: if (text !== root.customHistoryHoursText)
                     root.customHistoryHoursText = text
                   onAccepted: root.applyCustomHistoryRange()
@@ -5829,12 +6366,13 @@ Panel {
 
         BorderSurface {
           id: experimentalCard
-          visible: root.configured && root.settingsSection === "experimental"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "experimental"
           width: parent.width
           implicitHeight: experimentalForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: experimentalForm
@@ -5865,8 +6403,8 @@ Panel {
             BorderSurface {
               width: parent.width
               implicitHeight: experimentalWarning.implicitHeight + Style.space(18)
-              color: root.alpha(root.urgent, 0.07)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+              color: root.surfaceColor(root.alpha(root.urgent, 0.07))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.25), 1))
               radius: root.compactRadius
 
               Text {
@@ -5884,7 +6422,20 @@ Panel {
               }
             }
 
-            Toggle {
+            ChromeToggle {
+              width: parent.width
+              label: "Config file mode"
+              description: "Use the keyboard-first JSON editor above the settings panes. The Home Assistant token stays protected."
+              checked: root.configFileModeEnabled
+              enabled: !root.preferenceBusy && !root.configFileBusy
+              foreground: root.foreground
+              accent: root.controlAccentColor
+              fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
+              onClicked: root.setConfigFileModeEnabled(!root.configFileModeEnabled)
+            }
+
+            ChromeToggle {
               width: parent.width
               label: "MasterSwitch"
               description: "One guarded power button turns every available AC on or off, independently of climate controls."
@@ -5893,6 +6444,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setMasterSwitchEnabled(!root.masterSwitchEnabled)
             }
 
@@ -5903,8 +6455,8 @@ Panel {
               height: root.masterSwitchEnabled ? implicitHeight : 0
               opacity: root.masterSwitchEnabled ? 1 : 0
               clip: true
-              color: root.alpha(root.urgent, 0.07)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+              color: root.surfaceColor(root.alpha(root.urgent, 0.07))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.25), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -5929,7 +6481,7 @@ Panel {
               }
             }
 
-            Toggle {
+            ChromeToggle {
               width: parent.width
               label: "Multi-aircon panel"
               description: "Add several Home Assistant climate entities below the panel selector."
@@ -5938,6 +6490,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setMultiUnitEnabled(!root.multiUnitEnabled)
             }
 
@@ -5949,8 +6502,8 @@ Panel {
               height: root.multiUnitEnabled ? implicitHeight : 0
               opacity: root.multiUnitEnabled ? 1 : 0
               clip: true
-              color: root.alpha(root.accentColor, 0.025)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.18), 1)
+              color: root.surfaceColor(root.alpha(root.accentColor, 0.025))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.18), 1))
               radius: root.compactRadius
 
               Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
@@ -5970,7 +6523,7 @@ Panel {
                 Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
                 Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-                Toggle {
+                ChromeToggle {
                   width: parent.width
                   label: "Globally synced controls"
                   description: "Use one remote for every selected air conditioner, including power."
@@ -5979,6 +6532,7 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
+                  chromeLess: root.compactChromeEnabled
                   borderSpec: Border.none()
                   onClicked: root.setGlobalSyncControls(!root.globalSyncControls)
                 }
@@ -5999,7 +6553,7 @@ Panel {
                     NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic }
                   }
 
-                  Toggle {
+                  ChromeToggle {
                     width: parent.width
                     label: "Sync non-power controls"
                     description: "Recommended · sync temperature, mode, and fan while each AC keeps its own power button."
@@ -6008,6 +6562,7 @@ Panel {
                     foreground: root.foreground
                     accent: root.controlAccentColor
                     fontFamily: root.fontFamily
+                    chromeLess: root.compactChromeEnabled
                     borderSpec: Border.none()
                     onClicked: root.setSyncNonPowerControls(!root.syncNonPowerControls)
                   }
@@ -6070,7 +6625,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.controlAccentColor
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       selected: root.barTemperatureMode === modelData.value
                       enabled: !root.preferenceBusy
                       radius: root.compactRadius
@@ -6104,7 +6659,7 @@ Panel {
                       accent: root.controlAccentColor
                       background: root.alpha(root.accentColor,
                         root.barTemperatureEntities.indexOf(String(modelData)) >= 0 ? 0.10 : 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       selected: root.barTemperatureEntities.indexOf(String(modelData)) >= 0
                       enabled: !root.preferenceBusy
                       radius: root.compactRadius
@@ -6113,7 +6668,7 @@ Panel {
                   }
                 }
 
-                Toggle {
+                ChromeToggle {
                   width: parent.width
                   label: "Decimal average"
                   description: "Show one decimal when averaging multiple AC temperatures."
@@ -6122,13 +6677,14 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
+                  chromeLess: root.compactChromeEnabled
                   borderSpec: Border.none()
                   onClicked: root.setAverageTemperatureDecimals(!root.averageTemperatureDecimals)
                 }
               }
             }
 
-            Toggle {
+            ChromeToggle {
               width: parent.width
               label: "Extended chart history"
               description: "Unlock 7-day, 30-day, and custom ranges. An always-on external logger is recommended for long recordings."
@@ -6137,6 +6693,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setExperimentalHistoryEnabled(!root.experimentalHistoryEnabled)
             }
 
@@ -6144,8 +6701,8 @@ Panel {
               visible: root.experimentalHistoryEnabled
               width: parent.width
               implicitHeight: extendedHistoryNotice.implicitHeight + Style.space(18)
-              color: root.alpha(root.accentColor, 0.06)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.22), 1)
+              color: root.surfaceColor(root.alpha(root.accentColor, 0.06))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.22), 1))
               radius: root.compactRadius
 
               Text {
@@ -6175,14 +6732,14 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               tooltipText: "Open Preferences and configure the external Home Assistant host"
               enabled: !root.preferenceBusy
               onClicked: root.settingsSection = "preferences"
             }
 
-            Toggle {
+            ChromeToggle {
               id: shortcutsToggle
               width: parent.width
               label: "Keyboard shortcuts"
@@ -6192,6 +6749,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setShortcutsEnabled(!root.shortcutsEnabled)
             }
 
@@ -6207,14 +6765,14 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               enabled: !root.preferenceBusy
               tooltipText: "Open the keyboard shortcut editor"
               onClicked: root.settingsSection = "shortcuts"
             }
 
-            Toggle {
+            ChromeToggle {
               width: parent.width
               label: "Extra customisations"
               description: "Enable a dedicated Customisation section for colours and surface finish."
@@ -6223,6 +6781,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               fontFamily: root.fontFamily
+              chromeLess: root.compactChromeEnabled
               onClicked: root.setCustomAppearanceEnabled(!root.customAppearanceEnabled)
             }
 
@@ -6238,7 +6797,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               enabled: !root.preferenceBusy
               tooltipText: "Open the customisation editor"
@@ -6255,12 +6814,56 @@ Panel {
               height: root.customAppearanceEnabled ? implicitHeight : 0
               opacity: root.customAppearanceEnabled ? 1 : 0
               clip: true
-              spacing: Style.space(7)
+              spacing: root.compactChromeEnabled ? Style.space(5) : Style.space(7)
 
               Behavior on height { NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic } }
               Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
 
-              Toggle {
+              ChromeToggle {
+                width: parent.width
+                label: "Compact UI · remove cards and borders"
+                description: "Use a flatter, tighter layout with clear padding instead of card chrome."
+                checked: root.compactUiEnabled
+                enabled: !root.preferenceBusy
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                fontFamily: root.fontFamily
+                chromeLess: root.compactChromeEnabled
+                onClicked: root.setCompactUiEnabled(!root.compactUiEnabled)
+              }
+
+              ChromeToggle {
+                width: parent.width
+                label: "Auto · Omarchy background"
+                description: "Follow Omarchy's current popup background. Turn this off to choose a fixed panel colour."
+                checked: root.appearanceAutoBackground
+                enabled: !root.preferenceBusy
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                fontFamily: root.fontFamily
+                chromeLess: root.compactChromeEnabled
+                onClicked: root.setAppearanceAutoBackground(!root.appearanceAutoBackground)
+              }
+
+              AppearanceColorRow {
+                id: appearanceBackgroundRow
+                visible: !root.appearanceAutoBackground
+                width: parent.width
+                label: "PANEL BACKGROUND"
+                valueColor: root.customBackgroundColor
+                valueText: root.customBackgroundHexText
+                swatches: root.appearanceBackgroundPalette
+                foreground: root.foreground
+                accent: root.interactionAccentColor
+                fontFamily: root.fontFamily
+                enabled: !root.preferenceBusy
+                chromeLess: root.compactChromeEnabled
+                onSubmitted: function(value) {
+                  root.setAppearanceColor("appearance_background", value)
+                }
+              }
+
+              ChromeToggle {
                 width: parent.width
                 label: "Auto · Omarchy accent"
                 description: "Follow Omarchy's current accent. Turn this off to choose a fixed colour."
@@ -6269,6 +6872,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 fontFamily: root.fontFamily
+                chromeLess: root.compactChromeEnabled
                 onClicked: root.setAppearanceAutoAccent(!root.appearanceAutoAccent)
               }
 
@@ -6284,6 +6888,7 @@ Panel {
                 accent: root.interactionAccentColor
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
+                chromeLess: root.compactChromeEnabled
                 onSubmitted: function(value) {
                   root.setAppearanceColor("appearance_accent", value)
                 }
@@ -6301,12 +6906,13 @@ Panel {
                 accent: root.interactionAccentColor
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
+                chromeLess: root.compactChromeEnabled
                 onSubmitted: function(value) {
                   root.setAppearanceColor("appearance_control", value)
                 }
               }
 
-              Toggle {
+              ChromeToggle {
                 width: parent.width
                 label: "Per-device colours"
                 description: root.appearanceAutoAccent
@@ -6318,6 +6924,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.interactionAccentColor
                 fontFamily: root.fontFamily
+                chromeLess: root.compactChromeEnabled
                 onClicked: root.setAppearanceDeviceColorsEnabled(
                   !root.appearanceDeviceColorsEnabled)
               }
@@ -6358,6 +6965,7 @@ Panel {
                     accent: root.interactionAccentColor
                     fontFamily: root.fontFamily
                     enabled: !root.preferenceBusy
+                    chromeLess: root.compactChromeEnabled
                     onSubmitted: function(value) {
                       root.setAppearanceDeviceColor(String(modelData), value)
                     }
@@ -6414,6 +7022,11 @@ Panel {
                   horizontalAlignment: Text.AlignHCenter
                   inputMethodHints: Qt.ImhFormattedNumbersOnly
                   selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(transparencyValueField)
+                    borderSpec: root.controlSurfaceBorder(transparencyValueField)
+                    radius: root.compactRadius
+                  }
                   onTextChanged: if (text !== root.appearanceTransparencyText) root.appearanceTransparencyText = text
                   onAccepted: root.setAppearanceNumber("appearance_transparency", text)
                 }
@@ -6468,6 +7081,11 @@ Panel {
                   horizontalAlignment: Text.AlignHCenter
                   inputMethodHints: Qt.ImhFormattedNumbersOnly
                   selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(blurValueField)
+                    borderSpec: root.controlSurfaceBorder(blurValueField)
+                    radius: root.compactRadius
+                  }
                   onTextChanged: if (text !== root.appearanceBlurText) root.appearanceBlurText = text
                   onAccepted: root.setAppearanceNumber("appearance_blur", text)
                 }
@@ -6522,6 +7140,11 @@ Panel {
                   horizontalAlignment: Text.AlignHCenter
                   inputMethodHints: Qt.ImhFormattedNumbersOnly
                   selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(radiusValueField)
+                    borderSpec: root.controlSurfaceBorder(radiusValueField)
+                    radius: root.compactRadius
+                  }
                   onTextChanged: if (text !== root.appearanceRadiusText) root.appearanceRadiusText = text
                   onAccepted: root.setAppearanceNumber("appearance_radius", text)
                 }
@@ -6547,7 +7170,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.025)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
                 enabled: !root.preferenceBusy
                 tooltipText: "Restore the default visual values without changing this switch"
@@ -6560,13 +7183,14 @@ Panel {
 
         BorderSurface {
           id: shortcutsCard
-          visible: root.configured && root.settingsSection === "shortcuts"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "shortcuts"
             && root.shortcutsEnabled
           width: parent.width
           implicitHeight: shortcutsForm.implicitHeight + Style.space(40)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: shortcutsForm
@@ -6601,8 +7225,8 @@ Panel {
                 required property var modelData
                 width: parent.width
                 implicitHeight: Math.max(54, shortcutRow.implicitHeight) + Style.space(14)
-                color: root.alpha(root.foreground, 0.018)
-                borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+                color: root.surfaceColor(root.alpha(root.foreground, 0.018))
+                borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.11), 1))
                 radius: root.compactRadius
 
                 Row {
@@ -6662,12 +7286,12 @@ Panel {
 
                     BorderSurface {
                       anchors.fill: parent
-                      color: root.shortcutCaptureId === modelData.id
+                      color: root.compactChromeEnabled ? "transparent" : (root.shortcutCaptureId === modelData.id
                         ? root.alpha(root.accentColor, 0.12)
-                        : root.alpha(root.foreground, 0.025)
-                      borderSpec: Border.controlSpec(
+                        : root.alpha(root.foreground, 0.025))
+                      borderSpec: root.surfaceBorder(Border.controlSpec(
                         parent.activeFocus ? "focus" : "normal",
-                        root.foreground, root.controlAccentColor)
+                        root.foreground, root.controlAccentColor))
                       radius: root.compactRadius
                     }
 
@@ -6727,8 +7351,8 @@ Panel {
               height: individualPowerAvailable ? implicitHeight : 0
               opacity: individualPowerAvailable ? 1 : 0
               clip: true
-              color: root.alpha(root.accentColor, 0.045)
-              borderSpec: Border.flat(root.alpha(root.accentColor, 0.22), 1)
+              color: root.surfaceColor(root.alpha(root.accentColor, 0.045))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.22), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -6772,11 +7396,11 @@ Panel {
                     required property int index
                     width: parent.width
                     implicitHeight: Style.space(44)
-                    color: root.alpha(root.accentColor,
-                      root.shortcutEnabled("toggle_power") ? 0.055 : 0.018)
-                    borderSpec: Border.flat(root.alpha(
+                    color: root.surfaceColor(root.alpha(root.accentColor,
+                      root.shortcutEnabled("toggle_power") ? 0.055 : 0.018))
+                    borderSpec: root.surfaceBorder(Border.flat(root.alpha(
                       root.shortcutEnabled("toggle_power") ? root.accentColor : root.foreground,
-                      root.shortcutEnabled("toggle_power") ? 0.20 : 0.10), 1)
+                      root.shortcutEnabled("toggle_power") ? 0.20 : 0.10), 1))
                     radius: root.compactRadius
 
                     Row {
@@ -6870,7 +7494,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               enabled: !root.preferenceBusy
               tooltipText: "Restore the default keys and per-shortcut switches"
@@ -6881,21 +7505,23 @@ Panel {
 
         BorderSurface {
           id: customisationCard
-          visible: root.configured && root.settingsSection === "customisation"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "customisation"
             && root.customAppearanceEnabled
           width: parent.width
-          implicitHeight: customisationForm.implicitHeight + Style.space(40)
+          implicitHeight: customisationForm.implicitHeight
+            + (root.compactChromeEnabled ? Style.space(20) : Style.space(40))
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: customisationForm
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: Style.space(20)
-            spacing: Style.space(11)
+            anchors.margins: root.uiCardPadding
+            spacing: root.uiGroupSpacing
 
             Text {
               width: parent.width
@@ -6918,9 +7544,10 @@ Panel {
             BorderSurface {
               id: customisationOptionsSurface
               width: parent.width
-              implicitHeight: customisationOptionsForm.implicitHeight + Style.space(24)
-              color: root.alpha(root.foreground, 0.018)
-              borderSpec: Border.flat(root.alpha(root.foreground, 0.10), 1)
+              implicitHeight: customisationOptionsForm.implicitHeight
+                + (root.compactChromeEnabled ? Style.space(16) : Style.space(24))
+              color: root.surfaceColor(root.alpha(root.foreground, 0.018))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.10), 1))
               radius: root.compactRadius
 
               Column {
@@ -6928,8 +7555,8 @@ Panel {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.margins: Style.space(12)
-                spacing: Style.space(8)
+                anchors.margins: root.compactChromeEnabled ? Style.space(8) : Style.space(12)
+                spacing: root.compactChromeEnabled ? Style.space(6) : Style.space(8)
 
                 Loader {
                   id: customisationOptionsLoader
@@ -6946,12 +7573,13 @@ Panel {
 
         BorderSurface {
           id: connectionMaintenanceCard
-          visible: root.configured && root.settingsSection === "maintenance"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "maintenance"
           width: parent.width
           implicitHeight: connectionMaintenanceForm.implicitHeight + Style.space(24)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: connectionMaintenanceForm
@@ -7031,7 +7659,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 background: root.alpha(root.accentColor, 0.08)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
                 enabled: !root.setupBusy && !root.localServerBusy && !root.preferenceBusy
                 tooltipText: root.connectionEditing
@@ -7053,7 +7681,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.025)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
                 enabled: !root.setupBusy && !root.localServerBusy
                 tooltipText: "Open the current Home Assistant address"
@@ -7097,6 +7725,11 @@ Panel {
                 font.family: root.fontFamily
                 inputMethodHints: Qt.ImhUrlCharactersOnly
                 selectByMouse: true
+                background: BorderSurface {
+                  color: root.controlSurfaceColor(reconnectUrlField)
+                  borderSpec: root.controlSurfaceBorder(reconnectUrlField)
+                  radius: root.compactRadius
+                }
                 onTextChanged: if (text !== root.setupUrl) root.setupUrl = text
                 onAccepted: reconnectTokenField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelReconnect()
@@ -7131,6 +7764,11 @@ Panel {
                 accent: root.controlAccentColor
                 font.family: root.fontFamily
                 selectByMouse: true
+                background: BorderSurface {
+                  color: root.controlSurfaceColor(reconnectTokenField)
+                  borderSpec: root.controlSurfaceBorder(reconnectTokenField)
+                  radius: root.compactRadius
+                }
                 onTextChanged: if (text !== root.setupToken) root.setupToken = text
                 onAccepted: root.submitSetup(true)
                 Keys.onEscapePressed: root.cancelReconnect()
@@ -7153,11 +7791,12 @@ Panel {
                 options: root.setupDropdownOptions
                 value: root.setupSelectedEntity
                 foreground: root.foreground
-                background: Color.popups.background
+                background: root.appearanceBackgroundColor
                 popupBorder: Color.popups.border
                 accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 controlRadius: root.compactRadius
+                chromeLess: root.compactChromeEnabled
                 onChanged: function(value) { root.setupSelectedEntity = value }
               }
 
@@ -7193,8 +7832,8 @@ Panel {
                 visible: root.setupError !== ""
                 width: parent.width
                 implicitHeight: reconnectMessage.implicitHeight + Style.space(18)
-                color: root.alpha(root.urgent, 0.09)
-                borderSpec: Border.flat(root.alpha(root.urgent, 0.32), 1)
+                color: root.surfaceColor(root.alpha(root.urgent, 0.09))
+                borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.32), 1))
                 radius: root.compactRadius
 
                 Text {
@@ -7217,12 +7856,13 @@ Panel {
 
         BorderSurface {
           id: localServerMaintenanceCard
-          visible: root.configured && root.settingsSection === "maintenance"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "maintenance"
           width: parent.width
           implicitHeight: localServerMaintenanceForm.implicitHeight + Style.space(24)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, 0.035)
-          borderSpec: Border.flat(root.alpha(root.accentColor, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.accentColor, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.20), 1))
 
           Column {
             id: localServerMaintenanceForm
@@ -7307,7 +7947,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.foreground, 0.025)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               enabled: !root.localServerBusy && !root.setupBusy && !root.preferenceBusy
               onClicked: root.localServerExpanded = !root.localServerExpanded
@@ -7332,8 +7972,8 @@ Panel {
               BorderSurface {
                 width: parent.width
                 implicitHeight: localServerMaintenanceDetailsText.implicitHeight + Style.space(18)
-                color: root.alpha(root.foreground, 0.025)
-                borderSpec: Border.flat(root.alpha(root.foreground, 0.11), 1)
+                color: root.surfaceColor(root.alpha(root.foreground, 0.025))
+                borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.11), 1))
                 radius: root.compactRadius
 
                 Text {
@@ -7375,6 +8015,7 @@ Panel {
                   backTextColor: root.foreground
                   backBackground: root.alpha(root.foreground, 0.025)
                   controlRadius: root.compactRadius
+                  chromeLess: root.compactChromeEnabled
                   fontFamily: root.fontFamily
                   confirming: root.localServerConfirming
                   busy: root.localServerBusy
@@ -7394,7 +8035,7 @@ Panel {
                   foreground: root.foreground
                   accent: root.controlAccentColor
                   background: root.alpha(root.foreground, 0.025)
-                  bordered: true
+                  bordered: !root.compactChromeEnabled
                   radius: root.compactRadius
                   tooltipText: root.homeAssistantLinuxGuideUrl
                   enabled: !root.localServerBusy && !root.localServerConfirming
@@ -7411,8 +8052,8 @@ Panel {
                 height: hasLocalServerMaintenanceStatus ? implicitHeight : 0
                 opacity: hasLocalServerMaintenanceStatus ? 1 : 0
                 clip: true
-                color: root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.09)
-                borderSpec: Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.32), 1)
+                color: root.surfaceColor(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.09))
+                borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.localServerError !== "" ? root.urgent : root.accentColor, 0.32), 1))
                 radius: root.compactRadius
 
                 Behavior on height {
@@ -7443,12 +8084,13 @@ Panel {
 
         BorderSurface {
           id: aboutCard
-          visible: root.configured && root.settingsSection === "maintenance"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "maintenance"
           width: parent.width
           implicitHeight: aboutForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.025)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.14), 1)
+          color: root.surfaceColor(root.alpha(root.foreground, 0.025))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.14), 1))
 
           Column {
             id: aboutForm
@@ -7496,7 +8138,7 @@ Panel {
               foreground: root.foreground
               accent: root.controlAccentColor
               background: root.alpha(root.accentColor, 0.09)
-              bordered: true
+              bordered: !root.compactChromeEnabled
               radius: root.compactRadius
               tooltipText: root.githubUrl
               onClicked: Qt.openUrlExternally(root.githubUrl)
@@ -7506,12 +8148,13 @@ Panel {
 
         BorderSurface {
           id: appDataCard
-          visible: root.configured && root.settingsSection === "maintenance"
+          visible: root.configured && !root.configFileModeEnabled
+            && root.settingsSection === "maintenance"
           width: parent.width
           implicitHeight: appDataForm.implicitHeight + Style.space(32)
           radius: root.panelRadius
-          color: root.alpha(root.urgent, 0.025)
-          borderSpec: Border.flat(root.alpha(root.urgent, 0.20), 1)
+          color: root.surfaceColor(root.alpha(root.urgent, 0.025))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.20), 1))
 
           Column {
             id: appDataForm
@@ -7543,8 +8186,8 @@ Panel {
               id: resetCard
               width: parent.width
               implicitHeight: resetForm.implicitHeight + Style.space(20)
-              color: root.alpha(root.urgent, 0.035)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.20), 1)
+              color: root.surfaceColor(root.alpha(root.urgent, 0.035))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.20), 1))
               radius: root.compactRadius
 
               Column {
@@ -7609,8 +8252,8 @@ Panel {
                       id: resetWarningSurface
                       width: parent.width
                       implicitHeight: resetAppWarning.implicitHeight + Style.space(18)
-                      color: root.alpha(root.urgent, 0.07)
-                      borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                      color: root.surfaceColor(root.alpha(root.urgent, 0.07))
+                      borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.25), 1))
                       radius: root.compactRadius
 
                       Text {
@@ -7647,7 +8290,7 @@ Panel {
                     foreground: root.urgent
                     accent: root.urgent
                     background: root.alpha(root.urgent, 0.08)
-                    bordered: true
+                    bordered: !root.compactChromeEnabled
                     radius: root.compactRadius
                     enabled: !root.resetAppBusy && !root.resetAppConfirming && !root.setupBusy
                       && !root.localServerBusy && !root.preferenceBusy
@@ -7688,7 +8331,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.urgent
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       enabled: !root.resetAppBusy
                       tooltipText: "Keep the app data"
@@ -7737,8 +8380,8 @@ Panel {
                   height: hasResetStatus ? implicitHeight : 0
                   opacity: hasResetStatus ? 1 : 0
                   clip: true
-                  color: root.alpha(root.resetAppError !== "" ? root.urgent : root.accentColor, 0.09)
-                  borderSpec: Border.flat(root.alpha(root.resetAppError !== "" ? root.urgent : root.accentColor, 0.32), 1)
+                  color: root.surfaceColor(root.alpha(root.resetAppError !== "" ? root.urgent : root.accentColor, 0.09))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.resetAppError !== "" ? root.urgent : root.accentColor, 0.32), 1))
                   radius: root.compactRadius
 
                   Behavior on height {
@@ -7770,8 +8413,8 @@ Panel {
               id: uninstallCard
               width: parent.width
               implicitHeight: uninstallForm.implicitHeight + Style.space(20)
-              color: root.alpha(root.urgent, 0.035)
-              borderSpec: Border.flat(root.alpha(root.urgent, 0.20), 1)
+              color: root.surfaceColor(root.alpha(root.urgent, 0.035))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.20), 1))
               radius: root.compactRadius
 
               Column {
@@ -7818,7 +8461,7 @@ Panel {
                     foreground: root.urgent
                     accent: root.urgent
                     background: root.alpha(root.urgent, 0.08)
-                    bordered: true
+                    bordered: !root.compactChromeEnabled
                     radius: root.compactRadius
                     enabled: !root.uninstallBusy && !root.uninstallConfirming
                       && !root.resetAppBusy && !root.setupBusy && !root.localServerBusy
@@ -7859,7 +8502,7 @@ Panel {
                       foreground: root.foreground
                       accent: root.urgent
                       background: root.alpha(root.foreground, 0.025)
-                      bordered: true
+                      bordered: !root.compactChromeEnabled
                       radius: root.compactRadius
                       enabled: !root.uninstallBusy
                       tooltipText: "Close uninstall choices"
@@ -7939,7 +8582,7 @@ Panel {
                         foreground: root.foreground
                         accent: root.urgent
                         background: root.alpha(root.foreground, 0.025)
-                        bordered: true
+                        bordered: !root.compactChromeEnabled
                         selected: parent.selected
                         radius: root.compactRadius
                         enabled: !root.uninstallBusy
@@ -7989,8 +8632,8 @@ Panel {
                             id: uninstallOptionWarningSurface
                             width: parent.width
                             implicitHeight: uninstallOptionNotice.implicitHeight + Style.space(18)
-                            color: root.alpha(root.urgent, 0.07)
-                            borderSpec: Border.flat(root.alpha(root.urgent, 0.25), 1)
+                            color: root.surfaceColor(root.alpha(root.urgent, 0.07))
+                            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.25), 1))
                             radius: root.compactRadius
 
                             Text {
@@ -8046,7 +8689,7 @@ Panel {
                               foreground: root.foreground
                               accent: root.urgent
                               background: root.alpha(root.foreground, 0.025)
-                              bordered: true
+                              bordered: !root.compactChromeEnabled
                               radius: root.compactRadius
                               enabled: !root.uninstallBusy
                               tooltipText: "Choose a different uninstall scope"
@@ -8104,9 +8747,9 @@ Panel {
                   height: hasUninstallStatus ? implicitHeight : 0
                   opacity: hasUninstallStatus ? 1 : 0
                   clip: true
-                  color: root.alpha(root.uninstallError !== "" ? root.urgent : root.accentColor, 0.09)
-                  borderSpec: Border.flat(root.alpha(
-                    root.uninstallError !== "" ? root.urgent : root.accentColor, 0.30), 1)
+                  color: root.surfaceColor(root.alpha(root.uninstallError !== "" ? root.urgent : root.accentColor, 0.09))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(
+                    root.uninstallError !== "" ? root.urgent : root.accentColor, 0.30), 1))
                   radius: root.compactRadius
 
                   Behavior on height {
@@ -8141,21 +8784,21 @@ Panel {
         id: column
         visible: !root.setupOpen
         width: parent.width
-        spacing: Style.space(10)
+        spacing: root.compactChromeEnabled ? Style.space(6) : Style.space(10)
 
         BorderSurface {
           id: heroCard
           width: parent.width
           height: Style.space(84)
           radius: root.panelRadius
-          color: root.alpha(root.accentColor, root.isOn ? 0.10 : 0.04)
+          color: root.surfaceColor(root.alpha(root.accentColor, root.isOn ? 0.10 : 0.04))
           gradient: Gradient {
-            GradientStop { position: 0.0; color: root.alpha(root.accentColor, root.isOn ? 0.24 : 0.10) }
-            GradientStop { position: 0.58; color: root.alpha(root.accentColor, root.isOn ? 0.08 : 0.035) }
-            GradientStop { position: 1.0; color: root.alpha(root.foreground, 0.025) }
+            GradientStop { position: 0.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.accentColor, root.isOn ? 0.24 : 0.10) }
+            GradientStop { position: 0.58; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.accentColor, root.isOn ? 0.08 : 0.035) }
+            GradientStop { position: 1.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.foreground, 0.025) }
           }
-          borderSpec: Border.flat(
-            root.isOn ? root.alpha(root.accentColor, 0.58) : root.alpha(root.foreground, 0.18), 1)
+          borderSpec: root.surfaceBorder(Border.flat(
+            root.isOn ? root.alpha(root.accentColor, 0.58) : root.alpha(root.foreground, 0.18), 1))
 
           Rectangle {
             anchors.top: parent.top
@@ -8178,8 +8821,8 @@ Panel {
               height: Style.space(58)
               anchors.verticalCenter: parent.verticalCenter
               radius: root.nestedRadius
-              color: root.isOn ? root.alpha(root.accentColor, 0.18) : root.alpha(root.foreground, 0.05)
-              borderSpec: Border.flat(root.isOn ? root.alpha(root.accentColor, 0.78) : root.alpha(root.foreground, 0.22), 1)
+              color: root.surfaceColor(root.isOn ? root.alpha(root.accentColor, 0.18) : root.alpha(root.foreground, 0.05))
+              borderSpec: root.surfaceBorder(Border.flat(root.isOn ? root.alpha(root.accentColor, 0.78) : root.alpha(root.foreground, 0.22), 1))
 
               Rectangle {
                 id: iconGlow
@@ -8298,7 +8941,7 @@ Panel {
                 foreground: root.foreground
                 accent: root.controlAccentColor
                 background: root.alpha(root.foreground, 0.035)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
                 tooltipText: "Edit Home Assistant connection"
                 onClicked: root.openSetup()
@@ -8308,6 +8951,7 @@ Panel {
         }
 
         PanelSeparator {
+          visible: !root.compactChromeEnabled
           foreground: root.foreground
           strength: 0.08
         }
@@ -8319,11 +8963,12 @@ Panel {
           options: root.dropdownOptions
           value: root.pendingEntity !== "" ? root.pendingEntity : root.selectedEntity
           foreground: root.foreground
-          background: Color.popups.background
+          background: root.appearanceBackgroundColor
           popupBorder: Color.popups.border
           accent: root.controlAccentColor
           fontFamily: root.fontFamily
           controlRadius: root.compactRadius
+          chromeLess: root.compactChromeEnabled
           onChanged: function(value) { root.chooseEntity(value) }
         }
 
@@ -8352,9 +8997,9 @@ Panel {
               width: selectedUnitsSection.width
               height: Style.space(32)
               radius: root.compactRadius
-              color: root.alpha(cardAccent, String(modelData) === root.selectedEntity ? 0.12 : 0.045)
-              borderSpec: Border.flat(root.alpha(
-                cardAccent, String(modelData) === root.selectedEntity ? 0.36 : 0.18), 1)
+              color: root.surfaceColor(root.alpha(cardAccent, String(modelData) === root.selectedEntity ? 0.12 : 0.045))
+              borderSpec: root.surfaceBorder(Border.flat(root.alpha(
+                cardAccent, String(modelData) === root.selectedEntity ? 0.36 : 0.18), 1))
 
               Row {
                 anchors.fill: parent
@@ -8387,7 +9032,7 @@ Panel {
                   foreground: root.foreground
                   accent: parent.parent.cardAccent
                   background: root.alpha(root.foreground, 0.035)
-                  bordered: true
+                  bordered: !root.compactChromeEnabled
                   radius: width / 2
                   enabled: root.selectedEntities.length > 1 && !root.actionBusy
                   tooltipText: root.selectedEntities.length > 1
@@ -8447,10 +9092,12 @@ Panel {
                 showClimateControls: root.showClimateControls
                 accent: root.deviceControlAccent(String(modelData))
                 cardAccent: root.deviceCardAccent(String(modelData))
+                popupBackground: root.appearanceBackgroundColor
                 foreground: root.foreground
                 dim: root.dim
                 fontFamily: root.fontFamily
                 panelRadius: root.compactRadius
+                chromeLess: root.compactChromeEnabled
                 enabled: root.connected && !root.actionBusy
                 onTemperatureRequested: function(value) {
                   root.requestUnitTemperature(String(modelData), value)
@@ -8473,6 +9120,7 @@ Panel {
         }
 
         PanelSeparator {
+          visible: !root.compactChromeEnabled
           foreground: root.foreground
           strength: 0.08
         }
@@ -8504,8 +9152,8 @@ Panel {
             width: moodTextLabel.implicitWidth + Style.space(14)
             height: Style.space(22)
             radius: height / 2
-            color: root.alpha(root.accentColor, root.moodText === "COMFY" ? 0.16 : 0.09)
-            borderSpec: Border.flat(root.alpha(root.accentColor, root.moodText === "COMFY" ? 0.55 : 0.32), 1)
+            color: root.surfaceColor(root.alpha(root.accentColor, root.moodText === "COMFY" ? 0.16 : 0.09))
+            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, root.moodText === "COMFY" ? 0.55 : 0.32), 1))
 
             Text {
               id: moodTextLabel
@@ -8535,13 +9183,13 @@ Panel {
             width: Math.round((parent.width - parent.spacing) * 0.34)
             height: Style.space(98)
             radius: root.panelRadius
-            color: root.alpha(root.foreground, 0.035)
+            color: root.surfaceColor(root.alpha(root.foreground, 0.035))
             gradient: Gradient {
-              GradientStop { position: 0.0; color: root.alpha(root.ambientTemperatureTint, 0.075) }
-              GradientStop { position: 0.56; color: root.alpha(root.ambientTemperatureTint, 0.032) }
-              GradientStop { position: 1.0; color: root.alpha(root.foreground, 0.018) }
+              GradientStop { position: 0.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.ambientTemperatureTint, 0.075) }
+              GradientStop { position: 0.56; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.ambientTemperatureTint, 0.032) }
+              GradientStop { position: 1.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.foreground, 0.018) }
             }
-            borderSpec: Border.flat(root.alpha(root.foreground, 0.16), 1)
+            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.16), 1))
 
             Column {
               anchors.centerIn: parent
@@ -8577,27 +9225,27 @@ Panel {
             width: parent.width - ambientCard.width - parent.spacing
             height: ambientCard.height
             radius: root.panelRadius
-            color: root.isOn
+            color: root.compactChromeEnabled ? "transparent" : (root.isOn
               ? root.alpha(root.accentColor, root.hasLocalTarget ? 0.14 : 0.08)
-              : root.alpha(root.foreground, 0.035)
+              : root.alpha(root.foreground, 0.035))
             gradient: Gradient {
               GradientStop {
                 position: 0.0
-                color: root.isOn
+                color: root.compactChromeEnabled ? "transparent" : (root.isOn
                   ? root.alpha(root.accentColor, root.hasLocalTarget ? 0.22 : 0.14)
-                  : root.alpha(root.foreground, 0.075)
+                  : root.alpha(root.foreground, 0.075))
               }
               GradientStop {
                 position: 1.0
-                color: root.isOn
+                color: root.compactChromeEnabled ? "transparent" : (root.isOn
                   ? root.alpha(root.accentColor, root.hasLocalTarget ? 0.06 : 0.025)
-                  : root.alpha(root.foreground, 0.018)
+                  : root.alpha(root.foreground, 0.018))
               }
             }
-            borderSpec: Border.flat(
+            borderSpec: root.surfaceBorder(Border.flat(
               root.isOn
                 ? root.alpha(root.accentColor, root.hasLocalTarget ? 0.72 : 0.38)
-                : root.alpha(root.foreground, 0.16), 1)
+                : root.alpha(root.foreground, 0.16), 1))
 
             Rectangle {
               visible: root.isOn
@@ -8647,7 +9295,7 @@ Panel {
                 foreground: root.isOn ? root.accentColor : root.dim
                 accent: root.controlAccentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 tooltipText: "Lower target temperature"
                 onClicked: root.adjustTarget(-1)
 
@@ -8693,7 +9341,7 @@ Panel {
                 foreground: root.isOn ? root.accentColor : root.dim
                 accent: root.controlAccentColor
                 background: root.isOn ? root.alpha(root.accentColor, 0.09) : root.alpha(root.foreground, 0.025)
-                bordered: true
+                bordered: !root.compactChromeEnabled
                 tooltipText: "Raise target temperature"
                 onClicked: root.adjustTarget(1)
 
@@ -8772,6 +9420,7 @@ Panel {
             accent: root.controlAccentColor
             fontFamily: root.fontFamily
             panelRadius: root.compactRadius
+            chromeLess: root.compactChromeEnabled
             onPowerRequested: root.togglePower()
             onPowerCancelRequested: root.cancelPower()
           }
@@ -8813,10 +9462,10 @@ Panel {
                 BorderSurface {
                   anchors.fill: parent
                   radius: root.compactRadius
-                  color: root.alpha(parent.cardAccent,
-                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.075 : 0.035)
-                  borderSpec: Border.flat(root.alpha(parent.cardAccent,
-                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.30 : 0.14), 1)
+                  color: root.surfaceColor(root.alpha(parent.cardAccent,
+                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.075 : 0.035))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(parent.cardAccent,
+                    parent.powerPending || parent.localPowerOn || parent.actualIsOn ? 0.30 : 0.14), 1))
 
                   Column {
                     anchors.fill: parent
@@ -8868,6 +9517,7 @@ Panel {
                       accent: root.deviceControlAccent(splitPowerCard.entityId)
                       fontFamily: root.fontFamily
                       panelRadius: root.compactRadius
+                      chromeLess: root.compactChromeEnabled
                       onPowerRequested: function(value) {
                         root.requestUnitPower(splitPowerCard.entityId, value, true)
                       }
@@ -8902,8 +9552,8 @@ Panel {
             width: parent.width
             implicitHeight: advancedClimateForm.implicitHeight + Style.space(28)
             radius: root.panelRadius
-            color: root.alpha(root.accentColor, 0.045)
-            borderSpec: Border.flat(root.alpha(root.accentColor, 0.25), 1)
+            color: root.surfaceColor(root.alpha(root.accentColor, 0.045))
+            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.25), 1))
 
             Column {
               id: advancedClimateForm
@@ -8965,11 +9615,12 @@ Panel {
                   options: root.modeDropdownOptions
                   value: root.activeMode
                   foreground: root.foreground
-                  background: Color.popups.background
+                  background: root.appearanceBackgroundColor
                   popupBorder: Color.popups.border
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
+                  chromeLess: root.compactChromeEnabled
                   enabled: root.connected && (root.isOn || root.localMode !== "")
                     && !root.actionBusy && !root.masterSwitchBusy
                   onChanged: function(value) { root.requestMode(value) }
@@ -8985,11 +9636,12 @@ Panel {
                   options: root.fanModeDropdownOptions
                   value: root.activeFanMode
                   foreground: root.foreground
-                  background: Color.popups.background
+                  background: root.appearanceBackgroundColor
                   popupBorder: Color.popups.border
                   accent: root.controlAccentColor
                   fontFamily: root.fontFamily
                   controlRadius: root.compactRadius
+                  chromeLess: root.compactChromeEnabled
                   enabled: root.connected && root.isOn && !root.actionBusy && !root.masterSwitchBusy
                   onChanged: function(value) { root.requestFanMode(value) }
                 }
@@ -9008,8 +9660,8 @@ Panel {
           opacity: masterSwitchVisible ? 1 : 0
           clip: true
           radius: root.panelRadius
-          color: root.alpha(root.foreground, 0.035)
-          borderSpec: Border.flat(root.alpha(root.foreground, 0.16), 1)
+          color: root.surfaceColor(root.alpha(root.foreground, 0.035))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.16), 1))
 
           Behavior on height {
             NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
@@ -9059,6 +9711,7 @@ Panel {
               backTextColor: root.foreground
               backBackground: root.alpha(root.foreground, 0.025)
               controlRadius: root.compactRadius
+              chromeLess: root.compactChromeEnabled
               fontFamily: root.fontFamily
               confirming: root.turnOffAllConfirming
               busy: root.turnOffAllBusy
@@ -9085,6 +9738,7 @@ Panel {
               backTextColor: root.foreground
               backBackground: root.alpha(root.foreground, 0.025)
               controlRadius: root.compactRadius
+              chromeLess: root.compactChromeEnabled
               fontFamily: root.fontFamily
               confirming: root.turnOnAllConfirming
               busy: root.turnOnAllBusy
@@ -9106,12 +9760,12 @@ Panel {
               height: hasMasterSwitchStatus ? implicitHeight : 0
               opacity: hasMasterSwitchStatus ? 1 : 0
               clip: true
-              color: root.alpha(
+              color: root.surfaceColor(root.alpha(
                 root.turnOffAllError !== "" || root.turnOnAllError !== "" ? root.urgent : root.accentColor,
-                0.09)
-              borderSpec: Border.flat(root.alpha(
-                root.turnOffAllError !== "" || root.turnOnAllError !== "" ? root.urgent : root.accentColor,
-                0.32), 1)
+                0.09))
+                  borderSpec: root.surfaceBorder(Border.flat(root.alpha(
+                    root.turnOffAllError !== "" || root.turnOnAllError !== "" ? root.urgent : root.accentColor,
+                    0.32), 1))
               radius: root.compactRadius
 
               Behavior on height {
@@ -9163,6 +9817,7 @@ Panel {
           borderColor: root.alpha(root.foreground, 0.14)
           fontFamily: root.fontFamily
           panelRadius: root.uiRadius
+          chromeLess: root.compactChromeEnabled
 
           Behavior on height {
             NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
@@ -9179,8 +9834,8 @@ Panel {
           height: root.errorText !== "" ? implicitHeight : 0
           opacity: root.errorText !== "" ? 1 : 0
           clip: true
-          color: root.alpha(root.urgent, 0.10)
-          borderSpec: Border.flat(root.alpha(root.urgent, 0.35), 1)
+          color: root.surfaceColor(root.alpha(root.urgent, 0.10))
+          borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.urgent, 0.35), 1))
           radius: root.panelRadius
 
           Behavior on height {
@@ -9226,8 +9881,8 @@ Panel {
 
           BorderSurface {
             anchors.fill: parent
-            color: root.alpha(Color.popups.background, 0.985)
-            borderSpec: Border.flat(root.alpha(root.accentColor, 0.26), 1)
+            color: root.surfaceColor(root.alpha(root.appearanceBackgroundColor, 0.985))
+            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.26), 1))
             radius: root.panelRadius
 
             Rectangle {
@@ -9255,12 +9910,12 @@ Panel {
             opacity: root.setupTransitioning ? 1 : 0
             transformOrigin: Item.Center
             radius: root.nestedRadius
-            color: root.alpha(root.accentColor, 0.075)
+            color: root.surfaceColor(root.alpha(root.accentColor, 0.075))
             gradient: Gradient {
-              GradientStop { position: 0.0; color: root.alpha(root.accentColor, 0.19) }
-              GradientStop { position: 1.0; color: root.alpha(root.accentColor, 0.035) }
+              GradientStop { position: 0.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.accentColor, 0.19) }
+              GradientStop { position: 1.0; color: root.compactChromeEnabled ? "transparent" : root.alpha(root.accentColor, 0.035) }
             }
-            borderSpec: Border.flat(root.alpha(root.accentColor, 0.44), 1)
+            borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.accentColor, 0.44), 1))
 
             Behavior on y {
               NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }

@@ -36,11 +36,13 @@ HISTORY_MAX_SAMPLES = 50_000
 MAX_SELECTED_ENTITIES = 12
 CLIMATE_ENTITY_PATTERN = re.compile(r"^climate\.[A-Za-z0-9_-]+$")
 APPEARANCE_HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
+DEFAULT_APPEARANCE_BACKGROUND = "#131516"
 DEFAULT_APPEARANCE_ACCENT = "#8FA79F"
 DEFAULT_APPEARANCE_CONTROL = "#8FA79F"
 DEFAULT_APPEARANCE_TRANSPARENCY = 0
 DEFAULT_APPEARANCE_BLUR = 0
 DEFAULT_APPEARANCE_RADIUS = 16
+DEFAULT_APPEARANCE_COMPACT = False
 REMOTE_HISTORY_DEFAULT_URL = "http://127.0.0.1:8123"
 REMOTE_HISTORY_DEFAULT_PATH = "~/.local/state/omarchy/homeassistant-ac-temperature.json"
 REMOTE_HISTORY_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:@\-\[\]]+$")
@@ -444,9 +446,9 @@ def bounded_preference(value: Any, minimum: float, maximum: float, default: floa
     return round(max(minimum, min(maximum, parsed)), 2)
 
 
-def appearance_hex(value: Any) -> str:
+def appearance_hex(value: Any, default: str = DEFAULT_APPEARANCE_ACCENT) -> str:
     text = str(value or "").strip()
-    return text.upper() if APPEARANCE_HEX_PATTERN.fullmatch(text) else DEFAULT_APPEARANCE_ACCENT
+    return text.upper() if APPEARANCE_HEX_PATTERN.fullmatch(text) else default
 
 
 def appearance_color_map(value: Any) -> dict[str, str]:
@@ -493,14 +495,23 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         "bar_temperature_entities": display_entities,
         "experimental_history_enabled": preference_enabled(config.get("experimental_history_enabled")),
         "shortcuts_enabled": preference_enabled(config.get("shortcuts_enabled", False)),
+        "config_file_mode_enabled": preference_enabled(
+            config.get("config_file_mode_enabled", False)
+        ),
         "shortcuts": shortcut_settings(config),
         "custom_appearance_enabled": preference_enabled(config.get("custom_appearance_enabled")),
         "appearance_auto_accent": preference_enabled(
             config.get("appearance_auto_accent", True)
         ),
+        "appearance_auto_background": preference_enabled(
+            config.get("appearance_auto_background", True)
+        ),
         "appearance_accent": appearance_hex(config.get("appearance_accent")),
         "appearance_control": appearance_hex(
             config.get("appearance_control") or DEFAULT_APPEARANCE_CONTROL
+        ),
+        "appearance_background": appearance_hex(
+            config.get("appearance_background"), DEFAULT_APPEARANCE_BACKGROUND
         ),
         "appearance_device_colors_enabled": preference_enabled(
             config.get("appearance_device_colors_enabled", False)
@@ -516,6 +527,9 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "appearance_radius": bounded_preference(
             config.get("appearance_radius"), 8, 32, DEFAULT_APPEARANCE_RADIUS
+        ),
+        "appearance_compact": preference_enabled(
+            config.get("appearance_compact", DEFAULT_APPEARANCE_COMPACT)
         ),
     }
 
@@ -1337,6 +1351,317 @@ def read_setup_payload() -> dict[str, Any]:
     return payload
 
 
+def _config_file_bool(value: Any, name: str, default: bool) -> bool:
+    """Parse a JSON boolean while accepting the values used by the UI."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in {
+        "0", "1", "false", "true", "off", "on", "no", "yes"
+    }:
+        return preference_enabled(value)
+    raise HomeAssistantError(f"{name} must be true or false")
+
+
+def _config_file_number(value: Any, name: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise HomeAssistantError(f"{name} must be between {minimum:g} and {maximum:g}")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise HomeAssistantError(
+            f"{name} must be between {minimum:g} and {maximum:g}"
+        ) from exc
+    if parsed != parsed or not minimum <= parsed <= maximum:
+        raise HomeAssistantError(f"{name} must be between {minimum:g} and {maximum:g}")
+    return round(parsed, 2)
+
+
+def _config_file_color(value: Any, name: str, default: str) -> str:
+    text = str(value if value is not None else "").strip()
+    if not APPEARANCE_HEX_PATTERN.fullmatch(text):
+        raise HomeAssistantError(f"{name} must be a six-digit hex value such as #8FA79F")
+    return text.upper()
+
+
+def _config_file_entity_list(value: Any, fallback: Any, name: str) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    elif isinstance(value, str):
+        raw_items = value.split(",")
+    else:
+        raise HomeAssistantError(f"{name} must be a list of climate entity IDs")
+    normalized: list[str] = []
+    for item in raw_items:
+        entity_id = climate_entity_id(item)
+        if not entity_id:
+            raise HomeAssistantError(f"{name} contains an invalid climate entity ID")
+        if entity_id not in normalized:
+            normalized.append(entity_id)
+        if len(normalized) >= MAX_SELECTED_ENTITIES:
+            break
+    if not normalized:
+        normalized = selected_entity_ids(fallback)
+    if not normalized:
+        raise HomeAssistantError(f"{name} must contain at least one climate entity ID")
+    return normalized
+
+
+def _config_file_color_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise HomeAssistantError("appearance_device_colors must be a JSON object")
+    result: dict[str, str] = {}
+    for entity_id, color in value.items():
+        normalized_id = climate_entity_id(entity_id)
+        normalized_color = str(color or "").strip()
+        if not normalized_id:
+            raise HomeAssistantError("appearance_device_colors contains an invalid climate entity ID")
+        if not APPEARANCE_HEX_PATTERN.fullmatch(normalized_color):
+            raise HomeAssistantError(
+                "appearance_device_colors must contain six-digit hex colours"
+            )
+        if normalized_id not in result:
+            result[normalized_id] = normalized_color.upper()
+        if len(result) >= MAX_SELECTED_ENTITIES:
+            break
+    return result
+
+
+def _config_file_shortcuts(
+    value: Any, current_config: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise HomeAssistantError("shortcuts must be a JSON object")
+    current = shortcut_settings(current_config)
+    result: dict[str, dict[str, Any]] = {}
+    for name, default in SHORTCUT_DEFAULTS.items():
+        item = value.get(name, current[name])
+        if isinstance(item, str):
+            item = {"key": item}
+        if not isinstance(item, dict):
+            raise HomeAssistantError(f"shortcuts.{name} must be an object")
+        key = normalize_shortcut(item.get("key", current[name]["key"]))
+        if not key:
+            raise HomeAssistantError(f"shortcuts.{name}.key is not a valid shortcut")
+        enabled = _config_file_bool(
+            item.get("enabled"), f"shortcuts.{name}.enabled", current[name]["enabled"]
+        )
+        result[name] = {"key": key, "enabled": enabled}
+    return result
+
+
+def config_file_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+    """Return editable preferences without exposing connection credentials."""
+    (
+        _url,
+        _token,
+        entity_id,
+        advanced_controls,
+        master_switch_enabled,
+        display,
+        history_enabled,
+        selected_history_hours,
+        history_custom,
+        selected_history_source,
+        remote_target,
+        remote_port,
+        remote_url,
+        remote_path,
+    ) = config_values(config)
+    payload: dict[str, Any] = {
+        "config_version": 1,
+        "entity_id": entity_id,
+        "advanced_controls": advanced_controls,
+        "master_switch_enabled": master_switch_enabled,
+        "temperature_display": display,
+        "history_enabled": history_enabled,
+        "history_hours": selected_history_hours,
+        "history_custom": history_custom,
+        "history_source": selected_history_source,
+        "history_remote_target": remote_target,
+        "history_remote_port": remote_port,
+        "history_remote_url": remote_url,
+        "history_remote_path": remote_path,
+    }
+    payload.update(experimental_settings(config))
+    return payload
+
+
+def set_config_file(config: dict[str, Any], payload: dict[str, Any]) -> int:
+    """Validate and save a keyboard-editable preference document atomically."""
+    if not isinstance(payload, dict):
+        raise HomeAssistantError("The config file must contain a JSON object")
+
+    current_snapshot = config_file_snapshot(config)
+    next_config = dict(config)
+
+    entity_id = str(current_snapshot.get("entity_id") or "").strip()
+    if "entity_id" in payload:
+        entity_id = climate_entity_id(payload["entity_id"])
+        if not entity_id:
+            raise HomeAssistantError("entity_id must be a valid climate entity ID")
+    next_config["entity_id"] = entity_id
+
+    bool_keys = {
+        "advanced_controls",
+        "master_switch_enabled",
+        "history_enabled",
+        "multi_unit_enabled",
+        "global_sync_controls",
+        "sync_non_power_controls",
+        "average_temperature_decimals",
+        "experimental_history_enabled",
+        "shortcuts_enabled",
+        "config_file_mode_enabled",
+        "custom_appearance_enabled",
+        "appearance_auto_accent",
+        "appearance_auto_background",
+        "appearance_device_colors_enabled",
+        "appearance_compact",
+    }
+    for name in bool_keys:
+        next_config[name] = _config_file_bool(
+            payload.get(name), name, bool(current_snapshot.get(name))
+        )
+
+    display = str(payload.get("temperature_display", current_snapshot["temperature_display"])).strip().lower()
+    if display not in {"ambient", "target", "both"}:
+        raise HomeAssistantError("temperature_display must be ambient, target, or both")
+    next_config["temperature_display"] = display
+
+    source = str(payload.get("history_source", current_snapshot["history_source"])).strip().lower()
+    if source not in {"local", "server"}:
+        raise HomeAssistantError("history_source must be local or server")
+    next_config["history_source"] = source
+
+    history_hours = _config_file_number(
+        payload.get("history_hours", current_snapshot["history_hours"]),
+        "history_hours",
+        1,
+        MAX_HISTORY_HOURS,
+    )
+    history_custom = _config_file_bool(
+        payload.get("history_custom"), "history_custom", bool(current_snapshot["history_custom"])
+    )
+    if not next_config["experimental_history_enabled"]:
+        history_hours = min(history_hours, 24)
+        history_custom = False
+    next_config["history_hours"] = history_hours
+    next_config["history_custom"] = history_custom
+
+    current_remote = remote_history_settings(config)
+    next_config["history_remote_target"] = remote_history_target(
+        payload.get("history_remote_target", current_remote[0])
+    )
+    next_config["history_remote_port"] = remote_history_port(
+        payload.get("history_remote_port", current_remote[1])
+    )
+    next_config["history_remote_url"] = normalize_url(
+        payload.get("history_remote_url", current_remote[2])
+    )
+    next_config["history_remote_path"] = remote_history_path(
+        payload.get("history_remote_path", current_remote[3])
+    )
+
+    if "selected_entities" in payload:
+        selected = _config_file_entity_list(payload["selected_entities"], entity_id, "selected_entities")
+    else:
+        selected = selected_entity_ids(config.get("selected_entities"), entity_id)
+    next_config["selected_entities"] = selected
+    if "bar_temperature_entities" in payload:
+        next_config["bar_temperature_entities"] = _config_file_entity_list(
+            payload["bar_temperature_entities"], selected, "bar_temperature_entities"
+        )
+    else:
+        next_config["bar_temperature_entities"] = selected_entity_ids(
+            config.get("bar_temperature_entities"), selected
+        )
+
+    mode = str(payload.get("bar_temperature_mode", current_snapshot["bar_temperature_mode"])).strip().lower()
+    if mode not in {"average", "all", "selected"}:
+        raise HomeAssistantError("bar_temperature_mode must be average, all, or selected")
+    next_config["bar_temperature_mode"] = mode
+
+    next_config["temperature_unit"] = temperature_unit_preference(
+        payload.get("temperature_unit", current_snapshot["temperature_unit"])
+    )
+    if next_config["temperature_unit"] == "source" and str(
+        payload.get("temperature_unit", current_snapshot["temperature_unit"])
+    ).strip().lower() not in {"source", "celsius", "fahrenheit", "kelvin"}:
+        raise HomeAssistantError(
+            "temperature_unit must be source, celsius, fahrenheit, or kelvin"
+        )
+
+    next_config["shortcuts"] = _config_file_shortcuts(
+        payload.get("shortcuts", current_snapshot["shortcuts"]), config
+    )
+
+    color_defaults = {
+        "appearance_accent": DEFAULT_APPEARANCE_ACCENT,
+        "appearance_control": DEFAULT_APPEARANCE_CONTROL,
+        "appearance_background": DEFAULT_APPEARANCE_BACKGROUND,
+    }
+    for name, default in color_defaults.items():
+        next_config[name] = _config_file_color(
+            payload.get(name, current_snapshot.get(name, default)), name, default
+        )
+    if "appearance_device_colors" in payload:
+        next_config["appearance_device_colors"] = _config_file_color_map(
+            payload["appearance_device_colors"]
+        )
+    else:
+        next_config["appearance_device_colors"] = appearance_color_map(
+            config.get("appearance_device_colors")
+        )
+    next_config["appearance_transparency"] = _config_file_number(
+        payload.get("appearance_transparency", current_snapshot["appearance_transparency"]),
+        "appearance_transparency",
+        0,
+        100,
+    )
+    next_config["appearance_blur"] = _config_file_number(
+        payload.get("appearance_blur", current_snapshot["appearance_blur"]),
+        "appearance_blur",
+        0,
+        24,
+    )
+    next_config["appearance_radius"] = _config_file_number(
+        payload.get("appearance_radius", current_snapshot["appearance_radius"]),
+        "appearance_radius",
+        8,
+        32,
+    )
+
+    try:
+        save_config(next_config)
+    except OSError as exc:
+        raise HomeAssistantError(f"Cannot save the AC configuration: {exc}") from exc
+    config.clear()
+    config.update(next_config)
+
+    shortcut_sync_error = ""
+    if {
+        "shortcuts_enabled",
+        "shortcuts",
+        "multi_unit_enabled",
+        "global_sync_controls",
+    } & payload.keys():
+        shortcut_sync_error = sync_hyprland_shortcuts(next_config)
+
+    response = {
+        "ok": True,
+        "preference": "config_file",
+        "config_file_saved": True,
+        **config_file_snapshot(next_config),
+    }
+    if shortcut_sync_error:
+        response["shortcut_sync_error"] = shortcut_sync_error
+    return emit(response)
+
+
 def save_config(config: dict[str, Any]) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".home-assistant-ac.", dir=CONFIG_PATH.parent)
@@ -1456,11 +1781,14 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "bar_temperature_entities": previous_experimental["bar_temperature_entities"],
         "experimental_history_enabled": previous_experimental["experimental_history_enabled"],
         "shortcuts_enabled": previous_experimental["shortcuts_enabled"],
+        "config_file_mode_enabled": previous_experimental["config_file_mode_enabled"],
         "shortcuts": previous_experimental["shortcuts"],
         "custom_appearance_enabled": previous_experimental["custom_appearance_enabled"],
         "appearance_auto_accent": previous_experimental["appearance_auto_accent"],
+        "appearance_auto_background": previous_experimental["appearance_auto_background"],
         "appearance_accent": previous_experimental["appearance_accent"],
         "appearance_control": previous_experimental["appearance_control"],
+        "appearance_background": previous_experimental["appearance_background"],
         "appearance_device_colors_enabled": previous_experimental[
             "appearance_device_colors_enabled"
         ],
@@ -1468,6 +1796,7 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "appearance_transparency": previous_experimental["appearance_transparency"],
         "appearance_blur": previous_experimental["appearance_blur"],
         "appearance_radius": previous_experimental["appearance_radius"],
+        "appearance_compact": previous_experimental["appearance_compact"],
     }
     if current_config.get("poll_seconds") is not None:
         config["poll_seconds"] = current_config["poll_seconds"]
@@ -1945,13 +2274,16 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
     elif name == "reset_appearance":
         value = True
         config["appearance_auto_accent"] = True
+        config["appearance_auto_background"] = True
         config["appearance_accent"] = DEFAULT_APPEARANCE_ACCENT
         config["appearance_control"] = DEFAULT_APPEARANCE_CONTROL
+        config["appearance_background"] = DEFAULT_APPEARANCE_BACKGROUND
         config["appearance_device_colors_enabled"] = False
         config["appearance_device_colors"] = {}
         config["appearance_transparency"] = DEFAULT_APPEARANCE_TRANSPARENCY
         config["appearance_blur"] = DEFAULT_APPEARANCE_BLUR
         config["appearance_radius"] = DEFAULT_APPEARANCE_RADIUS
+        config["appearance_compact"] = DEFAULT_APPEARANCE_COMPACT
     elif name == "temperature_unit":
         value = temperature_unit_preference(value_text)
         if value not in {"celsius", "fahrenheit", "kelvin"}:
@@ -1961,8 +2293,9 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         "multi_unit_enabled", "global_sync_controls", "sync_non_power_controls",
         "average_temperature_decimals",
         "experimental_history_enabled",
-        "custom_appearance_enabled", "appearance_auto_accent",
-        "appearance_device_colors_enabled",
+        "custom_appearance_enabled", "appearance_auto_accent", "appearance_auto_background",
+        "appearance_device_colors_enabled", "appearance_compact",
+        "config_file_mode_enabled",
     }:
         if value_text.lower() not in {"on", "off"}:
             return fail(f"{name.replace('_', ' ').capitalize()} must be on or off")
@@ -1986,10 +2319,11 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
             value = selected_entity_ids(config.get("selected_entities"), config.get("entity_id"))
         config[name] = value
     elif name in {
-        "appearance_accent", "appearance_control", "appearance_device_colors",
+        "appearance_accent", "appearance_control", "appearance_background",
+        "appearance_device_colors",
         "appearance_transparency", "appearance_blur", "appearance_radius",
     }:
-        if name in {"appearance_accent", "appearance_control"}:
+        if name in {"appearance_accent", "appearance_control", "appearance_background"}:
             if not APPEARANCE_HEX_PATTERN.fullmatch(value_text):
                 return fail("Colour must be a six-digit hex value such as #8FA79F")
             value = value_text.upper()
@@ -2099,6 +2433,11 @@ def main(argv: list[str]) -> int:
         return emit(payload)
     try:
         config = load_config()
+        if action == "set-config-file" and len(argv) == 2:
+            try:
+                return set_config_file(config, read_setup_payload())
+            except HomeAssistantError as exc:
+                return fail(str(exc))
         (
             url,
             token,

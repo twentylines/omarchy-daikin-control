@@ -26,6 +26,7 @@ Item {
   property bool confirming: false
   property bool busy: false
   property bool actionEnabled: true
+  property bool chromeLess: false
   readonly property int motionDuration: 300
 
   signal actionRequested()
@@ -48,7 +49,7 @@ Item {
     foreground: root.busy ? root.actionTextColor : root.actionColor
     accent: root.actionColor
     background: root.busy ? root.actionColor : root.idleBackground
-    bordered: true
+    bordered: !root.chromeLess
     radius: root.controlRadius
     enabled: root.actionEnabled && !root.busy && !root.confirming
     tooltipText: root.idleTooltip
@@ -110,7 +111,7 @@ Item {
       foreground: root.backTextColor
       accent: root.actionColor
       background: root.backBackground
-      bordered: true
+      bordered: !root.chromeLess
       radius: root.controlRadius
       enabled: (root.confirming || root.actionEnabled) && !root.busy
       tooltipText: root.backTooltip

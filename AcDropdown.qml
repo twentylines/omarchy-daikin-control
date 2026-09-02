@@ -33,6 +33,7 @@ Item {
   property int popupRowHeight: Style.spacing.popupRowHeight
   property real controlRadius: Style.cornerRadius
   property bool showLabel: true
+  property bool chromeLess: false
   readonly property int motionFast: 140
   readonly property int motionStandard: 220
 
@@ -93,8 +94,9 @@ Item {
       readonly property bool _hot: triggerHover.hovered || root.hasCursor
       readonly property var _borderSpec: Border.controlSpec(trigger._focused ? "focus" : (trigger._hot ? "hover-cursor" : "normal"), root.foreground, root.accent)
 
-      color: Style.controlFill(trigger._focused, trigger._hot, root.foreground, root.accent)
-      borderSpec: _borderSpec
+      color: root.chromeLess
+        ? "transparent" : Style.controlFill(trigger._focused, trigger._hot, root.foreground, root.accent)
+      borderSpec: root.chromeLess ? Border.none() : _borderSpec
 
       activeFocusOnTab: true
 
@@ -201,7 +203,7 @@ Item {
 
         background: BorderSurface {
           color: root.background
-          borderSpec: root.popupBorderSpec
+          borderSpec: root.chromeLess ? Border.none() : root.popupBorderSpec
           radius: root.controlRadius
         }
 
