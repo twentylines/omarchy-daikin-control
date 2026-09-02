@@ -205,7 +205,7 @@ Item {
               verticalAlignment: Text.AlignVCenter
             }
 
-            Button {
+            AcButton {
               width: Style.space(28)
               height: width
               text: "−"
@@ -238,7 +238,7 @@ Item {
               verticalAlignment: Text.AlignVCenter
             }
 
-            Button {
+            AcButton {
               width: Style.space(28)
               height: width
               text: "+"

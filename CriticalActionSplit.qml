@@ -36,7 +36,7 @@ Item {
   height: implicitHeight
   clip: true
 
-  Button {
+  AcButton {
     id: idleButton
     anchors.fill: parent
     visible: opacity > 0.01
@@ -94,7 +94,7 @@ Item {
       NumberAnimation { duration: root.motionDuration; easing.type: Easing.OutCubic }
     }
 
-    Button {
+    AcButton {
       id: backButton
       x: 0
       width: splitFrame.currentBackWidth
@@ -118,7 +118,7 @@ Item {
       onClicked: root.backRequested()
     }
 
-    Button {
+    AcButton {
       id: confirmButton
       x: splitFrame.currentBackWidth + splitFrame.currentGap
       width: Math.max(0, parent.width - x)

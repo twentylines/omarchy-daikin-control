@@ -1248,6 +1248,15 @@ class HelperTests(unittest.TestCase):
         self.assertIn("appearance_device_colors_enabled", panel)
         self.assertIn("controlAccentColor", panel)
         self.assertIn("readonly property real uiRadius", panel)
+        self.assertIn("readonly property var panelBorderSpec", panel)
+        self.assertIn("borderSpec: root.panelBorderSpec", panel)
+        self.assertIn("if (root.globalTabNavigationEnabled) root.focusNextPanelItem(direction)", panel)
+        self.assertNotIn("else root.switchPanel(direction)", panel)
+        self.assertIn("!root.configFileModeEnabled && !root.globalTabNavigationEnabled", panel)
+        button = (HELPER.parent / "AcButton.qml").read_text(encoding="utf-8")
+        self.assertIn("property color selectedFillColor", button)
+        self.assertIn("property color selectedBorderColor", button)
+        self.assertIn("(selected || active) ? root.selectedFillColor", button)
         self.assertIn("readonly property real panelRadius: uiRadius", panel)
         self.assertIn("readonly property real nestedRadius: uiRadius", panel)
         self.assertIn("readonly property real compactRadius: uiRadius", panel)
@@ -1277,9 +1286,9 @@ class HelperTests(unittest.TestCase):
         self.assertIn("property real windowEndTimestamp: 0", chart)
         self.assertIn("root.windowEndTimestamp > 0", chart)
 
-    def test_plugin_version_is_0_3_0_and_settings_title_is_not_repeated(self):
+    def test_plugin_version_is_0_3_1_and_settings_title_is_not_repeated(self):
         manifest = json.loads((HELPER.parent / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.0")
+        self.assertEqual(manifest["version"], "0.3.1")
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
         self.assertNotIn('text: "SETTINGS"\n              color: root.dim', panel)
 

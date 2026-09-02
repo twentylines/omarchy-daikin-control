@@ -8,8 +8,16 @@ Toggle {
 
   property bool chromeLess: false
   property bool pointerHot: false
+  // Compact appearance removes a little vertical breathing room from toggle
+  // rows as well as removing their card chrome.
+  property bool compact: chromeLess
 
   onHovered: function(isHovered) { root.pointerHot = isHovered }
+
+  // Toggle.qml computes its own height from these inherited text properties;
+  // shrinking the title in compact mode keeps that calculation intact while
+  // avoiding clipped multi-line descriptions.
+  titleSize: root.compact ? Style.font.bodySmall : Style.font.subtitle
 
   color: root.chromeLess
     ? "transparent"

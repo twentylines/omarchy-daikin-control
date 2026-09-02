@@ -1,5 +1,21 @@
 # Patch Notes
 
+## 0.3.1
+
+- Pushed customisation through every plugin button: selected tabs, choices,
+  swatches, action controls, text, fills, and borders now use the configured
+  instance accent instead of Omarchy's foreground-selected fallback.
+- Wired the actual `KeyboardPanel` outer border to customisation and removed
+  the duplicate inset border that caused broken-looking rounded corners.
+  Panel card borders now follow the configured accent as well.
+- Made Compact UI denser with tighter panel/card padding, settings navigation,
+  colour editors, dropdown rows, and appearance spacing while retaining safe
+  wrapping for descriptions.
+- Made Global Tab navigation genuinely opt-in: disabled mode no longer changes
+  panels or lets focused ordinary settings fields traverse with Tab. Config
+  File Mode remains the intentional exception with its own editor/apply/reload
+  order.
+
 ## 0.3.0
 
 - Fixed Config File Mode so its redacted JSON loads automatically, Ctrl+S and

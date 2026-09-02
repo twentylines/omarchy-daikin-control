@@ -29,8 +29,8 @@ Item {
   property color accent: Color.accent
   readonly property var popupBorderSpec: Border.localOrSurfaceSpec("popups", "border", popupBorder, Color.popups.border, Style.normalBorderWidth)
   property string fontFamily: Style.font.family
-  property int rowHeight: Style.spacing.controlHeight
-  property int popupRowHeight: Style.spacing.popupRowHeight
+  property int rowHeight: root.chromeLess ? Style.space(30) : Style.spacing.controlHeight
+  property int popupRowHeight: root.chromeLess ? Style.space(30) : Style.spacing.popupRowHeight
   property real controlRadius: Style.cornerRadius
   property bool showLabel: true
   property bool chromeLess: false

@@ -20,10 +20,12 @@ Item {
   property var swatches: []
   property bool enabled: true
   property bool chromeLess: false
+  property bool compact: false
 
   signal submitted(string value)
 
-  implicitHeight: editorRow.height + (root.swatches.length > 0 ? swatchRow.height + Style.space(4) : 0)
+  implicitHeight: editorRow.height + (root.swatches.length > 0
+    ? swatchRow.height + (root.compact ? Style.space(2) : Style.space(4)) : 0)
 
   function channel(value) {
     var number = Math.round(Math.max(0, Math.min(1, Number(value))) * 255)
@@ -37,17 +39,17 @@ Item {
 
   Column {
     anchors.fill: parent
-    spacing: Style.space(4)
+    spacing: root.compact ? Style.space(2) : Style.space(4)
 
     Row {
       id: editorRow
       width: parent.width
-      height: Style.space(30)
-      spacing: Style.space(6)
+      height: root.compact ? Style.space(26) : Style.space(30)
+      spacing: root.compact ? Style.space(4) : Style.space(6)
 
       Text {
         id: editorLabel
-        width: Style.space(126)
+        width: root.compact ? Style.space(110) : Style.space(126)
         height: parent.height
         text: root.label
         color: root.foreground
@@ -58,9 +60,9 @@ Item {
         elide: Text.ElideRight
       }
 
-      Button {
+      AcButton {
         id: pickerButton
-        width: Style.space(30)
+        width: root.compact ? Style.space(26) : Style.space(30)
         height: parent.height
         text: ""
         fontFamily: root.fontFamily
@@ -79,7 +81,7 @@ Item {
 
       TextField {
         id: valueField
-        width: Math.max(Style.space(80), parent.width - editorLabel.width
+        width: Math.max(root.compact ? Style.space(72) : Style.space(80), parent.width - editorLabel.width
           - pickerButton.width - applyButton.width - parent.spacing * 3)
         height: parent.height
         text: root.valueText
@@ -104,9 +106,9 @@ Item {
         onAccepted: root.submitted(text)
       }
 
-      Button {
+      AcButton {
         id: applyButton
-        width: Style.space(58)
+        width: root.compact ? Style.space(54) : Style.space(58)
         height: parent.height
         text: "APPLY"
         fontSize: Style.font.caption
@@ -124,12 +126,12 @@ Item {
     Row {
       id: swatchRow
       width: parent.width
-      height: Style.space(22)
-      spacing: Style.space(5)
+      height: root.compact ? Style.space(20) : Style.space(22)
+      spacing: root.compact ? Style.space(4) : Style.space(5)
 
       Text {
         id: swatchLabel
-        width: Style.space(126)
+        width: root.compact ? Style.space(110) : Style.space(126)
         height: parent.height
         text: ""
       }
@@ -137,9 +139,9 @@ Item {
       Repeater {
         model: root.swatches
 
-        Button {
+        AcButton {
           required property var modelData
-          width: Style.space(22)
+          width: root.compact ? Style.space(20) : Style.space(22)
           height: width
           text: ""
           fontFamily: root.fontFamily

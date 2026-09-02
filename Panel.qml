@@ -143,6 +143,14 @@ Panel {
     ? customBackgroundColor : Color.popups.background
   readonly property color appearancePopupBorderColor: customAppearanceEnabled
     ? root.alpha(root.controlAccentColor, 0.52) : Color.popups.border
+  // KeyboardPanel paints its own card outside the plugin content. Supplying
+  // this spec is what makes the real outer popup border follow customisation;
+  // an inner BorderSurface alone cannot replace the stock card border.
+  readonly property var panelBorderSpec: root.compactChromeEnabled
+    ? Border.none()
+    : root.customAppearanceEnabled
+      ? Border.flat(root.alpha(root.accentColor, 0.72), Math.max(1, Style.space(1)))
+      : Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
   readonly property real appearanceSurfaceOpacity: customAppearanceEnabled
     ? Math.max(0, 1 - appearanceTransparency / 100) : 1
   readonly property real appearanceSoftness: customAppearanceEnabled
@@ -155,8 +163,8 @@ Panel {
   readonly property real panelRadius: uiRadius
   readonly property real nestedRadius: uiRadius
   readonly property real compactRadius: uiRadius
-  readonly property real uiCardPadding: compactChromeEnabled ? Style.space(10) : Style.space(16)
-  readonly property real uiGroupSpacing: compactChromeEnabled ? Style.space(6) : Style.space(9)
+  readonly property real uiCardPadding: compactChromeEnabled ? Style.space(8) : Style.space(16)
+  readonly property real uiGroupSpacing: compactChromeEnabled ? Style.space(4) : Style.space(9)
   readonly property bool deviceColorsActive: customAppearanceEnabled
     && !appearanceAutoAccent && appearanceDeviceColorsEnabled
   readonly property int motionFast: 140
@@ -303,7 +311,19 @@ Panel {
   }
 
   function surfaceBorder(value) {
-    return root.compactChromeEnabled ? Border.none() : value
+    if (root.compactChromeEnabled) return Border.none()
+    if (!root.customAppearanceEnabled || !value) return value
+
+    // Most panel cards describe their border with a foreground-derived colour
+    // before it reaches this helper. Recolour that shared surface path so the
+    // fixed accent is visible on every card, not only on controls that happen
+    // to receive `accent:` directly.
+    var width = Math.max(Border.top(value), Border.right(value),
+      Border.bottom(value), Border.left(value))
+    if (width <= 0) return value
+    var original = Border.color(value)
+    var opacity = original && original.a !== undefined ? original.a : 1
+    return Border.flat(root.alpha(root.accentColor, opacity), width)
   }
 
   function controlSurfaceColor(control) {
@@ -4753,6 +4773,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
+    borderSpec: root.panelBorderSpec
     contentWidth: panel.fittedContentWidth(root.setupOpen
       ? (root.configured
         ? (root.configFileModeEnabled ? Style.space(680) : Style.space(600))
@@ -4777,11 +4798,14 @@ Panel {
       anchors.topMargin: -(panel.padding + Border.top(panel.borderSpec))
       anchors.bottomMargin: -(panel.padding + Border.bottom(panel.borderSpec))
       z: -3
-      radius: root.panelRadius
+      // KeyboardPanel's card keeps the shell corner geometry. Match it here
+      // so the custom fill does not leave a second, offset corner behind it.
+      radius: Style.cornerRadius
       color: root.panelSurface
-      borderSpec: root.compactChromeEnabled
-        ? Border.none()
-        : Border.flat(root.alpha(root.accentColor, 0.30), 1)
+      // The actual outer border is supplied through KeyboardPanel.borderSpec;
+      // painting another border on this inset overlay creates doubled lines
+      // and broken-looking corners.
+      borderSpec: Border.none()
     }
 
     // Keep the panel readable over bright windows. The stock popup surface
@@ -4790,7 +4814,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       z: -1
-      radius: root.panelRadius
+      radius: Style.cornerRadius
       color: root.panelSurface
     }
 
@@ -4798,7 +4822,7 @@ Panel {
       anchors.fill: parent
       anchors.margins: -Style.space(8) * root.appearanceSoftness
       z: -2
-      radius: root.panelRadius
+      radius: Style.cornerRadius
       color: root.alpha(root.accentColor, root.appearanceSoftness * 0.08)
       opacity: root.appearanceSoftness
     }
@@ -4825,8 +4849,11 @@ Panel {
       }
       onActivateRequested: root.refresh()
       onTabRequested: function(direction) {
+        // Tab is opt-in. With the experimental switch off, do not turn Tab
+        // into panel switching or any other implicit navigation. Config File
+        // Mode is the one deliberate exception: its own child handlers keep
+        // the editor → apply → reload → toggle order alive.
         if (root.globalTabNavigationEnabled) root.focusNextPanelItem(direction)
-        else root.switchPanel(direction)
       }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
@@ -4848,8 +4875,17 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
 
-        Keys.priority: Keys.AfterItem
+        Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
+          // Text fields and other Qt controls can consume Tab before the
+          // panel key catcher sees it. Keep the Experimental switch
+          // authoritative by swallowing Tab in ordinary settings; Config
+          // File Mode deliberately bypasses this gate for its own order.
+          if (!root.configFileModeEnabled && !root.globalTabNavigationEnabled
+              && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
+            event.accepted = true
+            return
+          }
           if (event.key === Qt.Key_Escape) {
             event.accepted = true
             if (root.setupOpen && root.configured) root.cancelSetup()
@@ -4909,7 +4945,8 @@ Panel {
           id: settingsNavigationCard
           visible: root.configured
           width: parent.width
-          implicitHeight: settingsNavigationForm.implicitHeight + Style.space(20)
+          implicitHeight: settingsNavigationForm.implicitHeight
+            + (root.compactChromeEnabled ? Style.space(12) : Style.space(20))
           radius: root.panelRadius
           color: root.surfaceColor(root.alpha(root.foreground, 0.025))
           borderSpec: root.surfaceBorder(Border.flat(root.alpha(root.foreground, 0.14), 1))
@@ -4919,14 +4956,14 @@ Panel {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: Style.space(10)
-            spacing: Style.space(7)
+            anchors.margins: root.compactChromeEnabled ? Style.space(6) : Style.space(10)
+            spacing: root.compactChromeEnabled ? Style.space(4) : Style.space(7)
 
-            Button {
+            AcButton {
               id: backToControlsButton
               visible: root.configured
               width: parent.width
-              height: Style.space(38)
+              height: root.compactChromeEnabled ? Style.space(32) : Style.space(38)
               focusable: true
               text: "BACK TO AC CONTROLS"
               iconText: "←"
@@ -4989,12 +5026,12 @@ Panel {
               Repeater {
                 model: root.settingsSections
 
-                Button {
+                AcButton {
                   required property var modelData
                   width: (settingsSectionChoices.width
                     - settingsSectionChoices.spacing * (root.settingsSections.length - 1))
                     / root.settingsSections.length
-                  height: Style.space(34)
+                  height: root.compactChromeEnabled ? Style.space(30) : Style.space(34)
                   text: modelData.label
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(3)
@@ -5242,7 +5279,7 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              Button {
+              AcButton {
                 id: configFileApplyButton
                 width: parent.width - configFileReloadButton.width - parent.spacing
                 height: Style.space(38)
@@ -5273,7 +5310,7 @@ Panel {
                 onClicked: root.applyConfigFile()
               }
 
-              Button {
+              AcButton {
                 id: configFileReloadButton
                 width: Style.space(102)
                 height: Style.space(38)
@@ -5599,7 +5636,7 @@ Panel {
               }
             }
 
-            Button {
+            AcButton {
               width: parent.width
               height: Style.space(40)
               text: root.setupActionLabel
@@ -5627,7 +5664,7 @@ Panel {
               }
             }
 
-            Button {
+            AcButton {
               width: parent.width
               height: Style.space(40)
               text: "HOME ASSISTANT SETTINGS"
@@ -5812,7 +5849,7 @@ Panel {
                 onBackRequested: root.cancelLocalServerSetup()
               }
 
-              Button {
+              AcButton {
                 id: localServerGuideButton
                 width: Style.space(112)
                 height: Style.space(40)
@@ -5964,7 +6001,7 @@ Panel {
                       { value: "both", label: "BOTH" },
                     ]
 
-                    Button {
+                    AcButton {
                       required property var modelData
                       width: (temperatureDisplayChoices.width
                         - temperatureDisplayChoices.spacing * 2) / 3
@@ -6035,7 +6072,7 @@ Panel {
                       { value: "kelvin", label: "KELVIN" },
                     ]
 
-                    Button {
+                    AcButton {
                       required property var modelData
                       width: (temperatureUnitChoices.width
                         - temperatureUnitChoices.spacing * (temperatureUnitChoices.optionCount - 1))
@@ -6138,7 +6175,7 @@ Panel {
                       width: parent.width
                       spacing: Style.space(6)
 
-                      Button {
+                      AcButton {
                         width: (parent.width - parent.spacing) / 2
                         height: Style.space(34)
                         text: "LOCAL"
@@ -6155,7 +6192,7 @@ Panel {
                         onClicked: root.setHistorySource("local")
                       }
 
-                      Button {
+                      AcButton {
                         width: (parent.width - parent.spacing) / 2
                         height: Style.space(34)
                         text: "EXTERNAL SERVER"
@@ -6300,7 +6337,7 @@ Panel {
                     }
                   }
 
-                  Button {
+                  AcButton {
                     width: parent.width
                     height: Style.space(36)
                     text: "RECONNECT / CHANGE"
@@ -6523,7 +6560,7 @@ Panel {
                     width: parent.width
                     spacing: Style.space(6)
 
-                    Button {
+                    AcButton {
                       id: remoteHistoryConnectButton
                       width: parent.width
                       height: Style.space(44)
@@ -6555,7 +6592,7 @@ Panel {
                       }
                     }
 
-                    Button {
+                    AcButton {
                       id: remoteHistoryInstallButton
                       width: parent.width
                       height: Style.space(44)
@@ -6587,7 +6624,7 @@ Panel {
                       }
                     }
 
-                    Button {
+                    AcButton {
                       id: remoteHistoryCancelButton
                       visible: root.remoteHistoryConfigured && root.remoteHistoryReconfiguring
                       width: parent.width
@@ -6611,7 +6648,7 @@ Panel {
                     width: parent.width
                     spacing: Style.space(6)
 
-                    Button {
+                    AcButton {
                       width: parent.width
                       height: Style.space(38)
                       text: "GUIDE"
@@ -6636,7 +6673,7 @@ Panel {
                     width: parent.width
                     spacing: Style.space(6)
 
-                    Button {
+                    AcButton {
                       width: parent.width
                       height: Style.space(38)
                       text: root.remoteHistorySourceBusy ? "PREPARING…" : "COPY SOURCE"
@@ -6743,7 +6780,7 @@ Panel {
                 Repeater {
                   model: root.historyRangeOptions
 
-                  Button {
+                  AcButton {
                     required property var modelData
                     width: (historyRangeChoices.width
                       - historyRangeChoices.spacing * (root.historyRangeOptions.length - 1))
@@ -6806,7 +6843,7 @@ Panel {
                   onAccepted: root.applyCustomHistoryRange()
                 }
 
-                Button {
+                AcButton {
                   id: applyCustomHistoryButton
                   width: Style.space(76)
                   height: Style.space(38)
@@ -7116,7 +7153,7 @@ Panel {
                       { value: "selected", label: "SELECT" },
                     ]
 
-                    Button {
+                    AcButton {
                       required property var modelData
                       width: (barTemperatureChoices.width
                         - barTemperatureChoices.spacing * 2) / 3
@@ -7148,7 +7185,7 @@ Panel {
                   Repeater {
                     model: root.selectedEntities
 
-                    Button {
+                    AcButton {
                       required property var modelData
                       width: parent.width
                       height: Style.space(32)
@@ -7222,7 +7259,7 @@ Panel {
               }
             }
 
-            Button {
+            AcButton {
               visible: root.experimentalHistoryEnabled
               width: parent.width
               height: Style.space(34)
@@ -7255,7 +7292,7 @@ Panel {
               onClicked: root.setShortcutsEnabled(!root.shortcutsEnabled)
             }
 
-            Button {
+            AcButton {
               visible: root.shortcutsEnabled
               width: parent.width
               height: Style.space(34)
@@ -7287,7 +7324,7 @@ Panel {
               onClicked: root.setCustomAppearanceEnabled(!root.customAppearanceEnabled)
             }
 
-            Button {
+            AcButton {
               visible: root.customAppearanceEnabled
               width: parent.width
               height: Style.space(34)
@@ -7331,6 +7368,7 @@ Panel {
                 accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
                 onClicked: root.setCompactUiEnabled(!root.compactUiEnabled)
               }
 
@@ -7344,6 +7382,7 @@ Panel {
                 accent: root.controlAccentColor
                 fontFamily: root.fontFamily
                 chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
                 onClicked: root.setAppearanceAutoBackground(!root.appearanceAutoBackground)
               }
 
@@ -7361,6 +7400,7 @@ Panel {
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
                 onSubmitted: function(value) {
                   root.setAppearanceColor("appearance_background", value)
                 }
@@ -7393,6 +7433,7 @@ Panel {
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
                 onSubmitted: function(value) {
                   root.setAppearanceColor("appearance_accent", value)
                 }
@@ -7412,6 +7453,7 @@ Panel {
                 fontFamily: root.fontFamily
                 enabled: !root.preferenceBusy
                 chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
                 onSubmitted: function(value) {
                   root.setAppearanceColor("appearance_control", value)
                 }
@@ -7472,6 +7514,7 @@ Panel {
                     fontFamily: root.fontFamily
                     enabled: !root.preferenceBusy
                     chromeLess: root.compactChromeEnabled
+                    compact: root.compactChromeEnabled
                     onSubmitted: function(value) {
                       root.setAppearanceDeviceColor(String(modelData), value)
                     }
@@ -7665,7 +7708,7 @@ Panel {
                 wrapMode: Text.WordWrap
               }
 
-              Button {
+              AcButton {
                 width: parent.width
                 height: Style.space(34)
                 visible: root.customAppearanceEnabled
@@ -7990,7 +8033,7 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Button {
+            AcButton {
               width: parent.width
               height: Style.space(34)
               text: root.preferenceKind === "reset_shortcuts"
@@ -8153,7 +8196,7 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              Button {
+              AcButton {
                 id: reconnectToggleButton
                 width: parent.width - maintenanceHomeAssistantSettingsButton.width - parent.spacing
                 height: Style.space(38)
@@ -8174,7 +8217,7 @@ Panel {
                   ? root.cancelReconnect() : root.beginReconnect()
               }
 
-              Button {
+              AcButton {
                 id: maintenanceHomeAssistantSettingsButton
                 width: Style.space(196)
                 height: Style.space(38)
@@ -8306,7 +8349,7 @@ Panel {
                 onChanged: function(value) { root.setupSelectedEntity = value }
               }
 
-              Button {
+              AcButton {
                 width: parent.width
                 height: Style.space(38)
                 text: root.setupBusy ? "RECONFIGURING…" : "RECONFIGURE"
@@ -8439,7 +8482,7 @@ Panel {
               }
             }
 
-              Button {
+              AcButton {
                 id: localServerDetailsToggle
               width: parent.width
               height: Style.space(38)
@@ -8531,7 +8574,7 @@ Panel {
                   onBackRequested: root.cancelLocalServerSetup()
                 }
 
-                Button {
+                AcButton {
                   id: localServerMaintenanceGuide
                   width: Style.space(96)
                   height: Style.space(38)
@@ -8633,7 +8676,7 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Button {
+            AcButton {
               width: parent.width
               height: Style.space(40)
               text: "OPEN GITHUB HELP"
@@ -8785,7 +8828,7 @@ Panel {
                   height: Style.space(40)
                   clip: true
 
-                  Button {
+                  AcButton {
                     id: resetButton
                     anchors.fill: parent
                     visible: opacity > 0.01
@@ -8820,7 +8863,7 @@ Panel {
                       NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
                     }
 
-                    Button {
+                    AcButton {
                       id: resetBackButton
                       x: 0
                       width: resetSplitFrame.backWidth
@@ -8844,7 +8887,7 @@ Panel {
                       onClicked: root.cancelResetApp()
                     }
 
-                    Button {
+                    AcButton {
                       id: resetConfirmButton
                       x: resetSplitFrame.backWidth + resetSplitFrame.splitGap
                       width: Math.max(0, parent.width - x)
@@ -8956,7 +8999,7 @@ Panel {
                   height: Style.space(40)
                   clip: true
 
-                  Button {
+                  AcButton {
                     id: uninstallButton
                     anchors.fill: parent
                     visible: opacity > 0.01
@@ -8991,7 +9034,7 @@ Panel {
                       NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
                     }
 
-                    Button {
+                    AcButton {
                       id: uninstallBackButton
                       x: 0
                       width: uninstallSplitFrame.backWidth
@@ -9075,7 +9118,7 @@ Panel {
                         NumberAnimation { duration: root.motionStandard; easing.type: Easing.OutCubic }
                       }
 
-                      Button {
+                      AcButton {
                         id: uninstallOptionButton
                         width: parent.width
                         height: parent.selected ? 0 : Style.space(38)
@@ -9178,7 +9221,7 @@ Panel {
                               NumberAnimation { duration: root.motionEmphasis; easing.type: Easing.OutCubic }
                             }
 
-                            Button {
+                            AcButton {
                               id: uninstallOptionBackButton
                               x: 0
                               width: uninstallOptionSplitFrame.backWidth
@@ -9206,7 +9249,7 @@ Panel {
                               }
                             }
 
-                            Button {
+                            AcButton {
                               id: uninstallOptionConfirmButton
                               x: uninstallOptionSplitFrame.backWidth + uninstallOptionSplitFrame.splitGap
                               width: Math.max(0, parent.width - x)
@@ -9438,7 +9481,7 @@ Panel {
                 }
               }
 
-              Button {
+              AcButton {
                 width: Style.space(30)
                 height: Style.space(30)
                 iconText: "󰒓"
@@ -9525,7 +9568,7 @@ Panel {
                   verticalAlignment: Text.AlignVCenter
                 }
 
-                Button {
+                AcButton {
                   id: removeSelectedUnitButton
                   width: Style.space(24)
                   height: Style.space(24)
@@ -9789,7 +9832,7 @@ Panel {
               height: Style.space(38)
               spacing: Style.space(8)
 
-              Button {
+              AcButton {
                 id: decreaseTargetButton
                 width: Style.space(34)
                 height: width
@@ -9835,7 +9878,7 @@ Panel {
                 }
               }
 
-              Button {
+              AcButton {
                 id: increaseTargetButton
                 width: Style.space(34)
                 height: width

@@ -32,7 +32,7 @@ Item {
   height: implicitHeight
   clip: true
 
-  Button {
+  AcButton {
     id: idleButton
     anchors.fill: parent
     visible: opacity > 0.01
@@ -98,7 +98,7 @@ Item {
       }
     }
 
-    Button {
+    AcButton {
       id: cancelButton
       width: root.powerCanCancel ? (root.compact ? Style.space(72) : Style.space(86)) : 0
       height: parent.height
