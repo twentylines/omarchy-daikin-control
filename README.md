@@ -17,7 +17,6 @@ Daikin cloud or replace Home Assistant's Daikin integration.
 </tr>
 </table>
 
-Both gallery screenshots show a complete 24-hour ambient-temperature recording.
 
 ## Requirements
 
