@@ -1088,6 +1088,22 @@ class HelperTests(unittest.TestCase):
                     ["-o", f"IdentityAgent={socket_path}"],
                 )
 
+    def test_remote_history_reuses_the_desktop_ssh_connection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_dir = Path(directory)
+            with patch.dict(
+                helper.os.environ,
+                {"XDG_RUNTIME_DIR": str(runtime_dir)},
+                clear=False,
+            ):
+                args = helper.remote_history_control_args()
+            self.assertIn("ControlMaster=auto", args)
+            self.assertIn("ControlPersist=120", args)
+            self.assertIn(
+                f"ControlPath={runtime_dir / 'omarchy-homeassistant-ac-%C'}",
+                args,
+            )
+
     def test_settings_uses_maintenance_without_privacy_banner_or_copy_guide(self):
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
         self.assertIn('label: "MAINTENANCE"', panel)
@@ -1319,11 +1335,11 @@ class HelperTests(unittest.TestCase):
         self.assertIn("onConfirmingChanged", critical)
         self.assertIn("confirmationFocusTimer", critical)
 
-    def test_plugin_version_is_0_3_4_and_settings_title_is_not_repeated(self):
+    def test_plugin_version_is_0_3_5_and_settings_title_is_not_repeated(self):
         manifest = json.loads((HELPER.parent / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.4")
+        self.assertEqual(manifest["version"], "0.3.5")
         panel = (HELPER.parent / "Panel.qml").read_text(encoding="utf-8")
-        self.assertIn('readonly property string pluginVersion: "0.3.4"', panel)
+        self.assertIn('readonly property string pluginVersion: "0.3.5"', panel)
         self.assertIn('text: "VERSION " + root.pluginVersion', panel)
         self.assertNotIn('text: "SETTINGS"\n              color: root.dim', panel)
 
@@ -1342,11 +1358,14 @@ class HelperTests(unittest.TestCase):
         self.assertIn('property string metricLabel: ""', status)
         self.assertIn('property real warningThresholdMs: 150', status)
         self.assertIn('property real urgentThresholdMs: 500', status)
+        self.assertIn('property bool metricDotBeforeValue: false', status)
         self.assertIn('root.metricLabel !== ""', status)
         self.assertIn('text: root.formatHours(root.rangeHours) + (root.stale ? " · STALE" : "")', chart)
         self.assertIn('function settings_previous(): void', panel)
         self.assertIn('function settings_next(): void', panel)
         self.assertIn('function power_9(): void', panel)
+        self.assertIn('text: "·"', panel)
+        self.assertIn('metricDotBeforeValue: true', panel)
         self.assertNotIn('GlobalShortcut {', panel)
 
     def test_remote_history_path_is_written_to_the_logger_config(self):

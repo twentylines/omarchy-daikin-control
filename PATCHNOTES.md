@@ -1,5 +1,14 @@
 # Patch Notes
 
+## 0.3.5
+
+- Moved the live latency dot beside the SSH read value and replaced the old
+  leading indicator with a quiet separator.
+- Reused a short-lived SSH connection for recurring history reads, so the
+  displayed SSH read time no longer pays a fresh handshake on every refresh.
+- Clarified that SSH READ measures the complete remote history-file read, not
+  the PC's network ping.
+
 ## 0.3.4
 
 - Fixed the external chart header so `STALE` appears once, the selected-range

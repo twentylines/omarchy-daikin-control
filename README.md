@@ -176,9 +176,12 @@ because the remote logger has not produced a fresh sample. If the logger is
 reachable but its Home Assistant token or setup is invalid, use **INSTALL /
 UPDATE TIMER** to refresh the server-side configuration.
 The external status readout is labelled **SSH READ** because it measures the
-time to open the history file over SSH, not ICMP latency. It is warning-coloured
-from 150 ms and red only above 500 ms; a normal LAN ping can still be fast when
-the remote logger itself is failing.
+complete time to open the history file over SSH, including connection setup,
+authentication, and the remote file read. It is not ICMP latency. The plugin
+reuses a short-lived SSH connection for recurring reads, so the value settles
+after the first check. It is warning-coloured from 150 ms and red only above
+500 ms; a normal LAN ping can still be fast when the remote logger itself is
+failing.
 
 The installer is intentionally narrow: no sudo, package installation, open
 ports, telemetry, or Home Assistant control calls. It creates only the named

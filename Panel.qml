@@ -17,7 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginVersion: "0.3.4"
+  readonly property string pluginVersion: "0.3.5"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"
@@ -6586,11 +6586,22 @@ Panel {
                           font.letterSpacing: 0.8
                         }
 
+                        Text {
+                          text: "·"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          verticalAlignment: Text.AlignVCenter
+                        }
+
                         ServerStatus {
                           id: externalHistoryConnectionStatus
                           visible: root.remoteHistoryConnected
                           connected: true
                           pingMs: root.remoteHistoryPingMs
+                          hideConnectedDot: true
+                          metricDotBeforeValue: true
                           statusSpacing: Style.space(8)
                           foreground: root.foreground
                           warningColor: root.warning

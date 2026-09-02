@@ -851,12 +851,33 @@ def remote_history_agent_args() -> list[str]:
     return []
 
 
+def remote_history_control_args() -> list[str]:
+    """Reuse the GUI session's SSH connection for recurring history reads."""
+    runtime_dir = Path(
+        os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    )
+    try:
+        if not runtime_dir.is_dir():
+            return []
+    except OSError:
+        return []
+    return [
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=120",
+        "-o",
+        f"ControlPath={runtime_dir / 'omarchy-homeassistant-ac-%C'}",
+    ]
+
+
 def remote_history_ssh_command(target: str, port: int) -> list[str]:
     return [
         "ssh",
         "-T",
         *remote_history_identity_args(),
         *remote_history_agent_args(),
+        *remote_history_control_args(),
         "-o",
         "BatchMode=yes",
         "-o",
