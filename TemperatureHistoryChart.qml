@@ -23,6 +23,8 @@ Item {
   property bool showLiveIndicator: false
   property bool chromeLess: false
   property color liveColor: "#79B889"
+  property bool stale: false
+  property color warningColor: "#D0A66A"
   // The panel updates this value while the chart is visible so the time
   // window remains a rolling "last N hours" window instead of freezing at
   // the moment the last status response arrived.
@@ -244,7 +246,7 @@ Item {
               width: Style.space(5)
               height: width
               radius: width / 2
-              color: root.liveColor
+              color: root.stale ? root.warningColor : root.liveColor
               opacity: root.connected ? 1 : 0.35
 
               SequentialAnimation on opacity {
@@ -267,8 +269,8 @@ Item {
             // formatHours already includes the unit. Keep this badge exactly
             // as the selected range (for example, "24 H") rather than the
             // legacy range wording or a duplicated "H H" suffix.
-            text: root.formatHours(root.rangeHours)
-            color: root.accent
+            text: root.formatHours(root.rangeHours) + (root.stale ? " · STALE" : "")
+            color: root.stale ? root.warningColor : root.accent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
@@ -553,6 +555,8 @@ Item {
             function onUnitChanged() { chart.requestPaint() }
             function onEmptyMessageChanged() { chart.requestPaint() }
             function onConnectedChanged() { chart.requestPaint() }
+            function onStaleChanged() { chart.requestPaint() }
+            function onWarningColorChanged() { chart.requestPaint() }
           }
         }
       }

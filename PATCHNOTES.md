@@ -1,5 +1,16 @@
 # Patch Notes
 
+## 0.3.3
+
+- Fixed stale external charts so the last available logged window remains
+  visible, with a clear stale indicator instead of a blank graph.
+- Added a separate Home Assistant port pill beside the hostname/IP field;
+  http:// is the default while HTTPS and reverse-proxy paths remain supported.
+- Kept the popup outline visible through Compact UI, made it follow the
+  configured accent, and added a separate outer-border switch.
+- Made Global Tab navigation a hard opt-in, tightened the config editor border,
+  simplified the Settings button, and marked latency above 500 ms red.
+
 ## 0.3.2
 
 - Added a visible `VERSION 0.3.2` marker to the Settings header so the

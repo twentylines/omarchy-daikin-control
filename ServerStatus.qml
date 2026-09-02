@@ -21,7 +21,7 @@ Item {
   readonly property color statusColor: {
     var value = Number(root.pingMs)
     if (!root.connected || !isFinite(value) || value < 0) return root.foreground
-    if (value >= 1000) return root.urgentColor
+    if (value > 500) return root.urgentColor
     if (value >= 100) return root.warningColor
     return root.goodColor
   }

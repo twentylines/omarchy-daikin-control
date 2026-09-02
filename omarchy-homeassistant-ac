@@ -43,6 +43,7 @@ DEFAULT_APPEARANCE_TRANSPARENCY = 0
 DEFAULT_APPEARANCE_BLUR = 0
 DEFAULT_APPEARANCE_RADIUS = 16
 DEFAULT_APPEARANCE_COMPACT = False
+DEFAULT_APPEARANCE_OUTER_BORDER = True
 REMOTE_HISTORY_DEFAULT_URL = "http://127.0.0.1:8123"
 REMOTE_HISTORY_DEFAULT_PATH = "~/.local/state/omarchy/homeassistant-ac-temperature.json"
 REMOTE_HISTORY_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.:@\-\[\]]+$")
@@ -533,6 +534,9 @@ def experimental_settings(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "appearance_compact": preference_enabled(
             config.get("appearance_compact", DEFAULT_APPEARANCE_COMPACT)
+        ),
+        "appearance_outer_border_enabled": preference_enabled(
+            config.get("appearance_outer_border_enabled", DEFAULT_APPEARANCE_OUTER_BORDER)
         ),
     }
 
@@ -1559,6 +1563,7 @@ def set_config_file(config: dict[str, Any], payload: dict[str, Any]) -> int:
         "appearance_auto_background",
         "appearance_device_colors_enabled",
         "appearance_compact",
+        "appearance_outer_border_enabled",
     }
     for name in bool_keys:
         next_config[name] = _config_file_bool(
@@ -1836,6 +1841,9 @@ def configure(payload: dict[str, Any], current_config: dict[str, Any]) -> int:
         "appearance_blur": previous_experimental["appearance_blur"],
         "appearance_radius": previous_experimental["appearance_radius"],
         "appearance_compact": previous_experimental["appearance_compact"],
+        "appearance_outer_border_enabled": previous_experimental[
+            "appearance_outer_border_enabled"
+        ],
     }
     if current_config.get("poll_seconds") is not None:
         config["poll_seconds"] = current_config["poll_seconds"]
@@ -2327,6 +2335,7 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         config["appearance_blur"] = DEFAULT_APPEARANCE_BLUR
         config["appearance_radius"] = DEFAULT_APPEARANCE_RADIUS
         config["appearance_compact"] = DEFAULT_APPEARANCE_COMPACT
+        config["appearance_outer_border_enabled"] = DEFAULT_APPEARANCE_OUTER_BORDER
     elif name == "temperature_unit":
         value = temperature_unit_preference(value_text)
         if value not in {"celsius", "fahrenheit", "kelvin"}:
@@ -2338,6 +2347,7 @@ def set_preference(config: dict[str, Any], raw_name: str, raw_value: str) -> int
         "experimental_history_enabled",
         "custom_appearance_enabled", "appearance_auto_accent", "appearance_auto_background",
         "appearance_device_colors_enabled", "appearance_compact",
+        "appearance_outer_border_enabled",
         "global_tab_navigation_enabled",
         "config_file_mode_enabled",
     }:

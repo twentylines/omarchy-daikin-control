@@ -17,7 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginVersion: "0.3.2"
+  readonly property string pluginVersion: "0.3.3"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"
@@ -136,6 +136,8 @@ Panel {
   property string appearanceRadiusText: "16"
   property bool compactUiEnabled: false
   property bool compactUiEnabledPrevious: false
+  property bool appearanceOuterBorderEnabled: true
+  property bool appearanceOuterBorderEnabledPrevious: true
   readonly property color accentColor: customAppearanceEnabled && !appearanceAutoAccent
     ? customAccentColor : Color.accent
   // The control colour drives switches, sliders, fields, and dropdowns. Action
@@ -151,7 +153,7 @@ Panel {
   // KeyboardPanel paints its own card outside the plugin content. Supplying
   // this spec is what makes the real outer popup border follow customisation;
   // an inner BorderSurface alone cannot replace the stock card border.
-  readonly property var panelBorderSpec: root.compactChromeEnabled
+  readonly property var panelBorderSpec: !root.appearanceOuterBorderEnabled
     ? Border.none()
     : root.customAppearanceEnabled
       ? Border.flat(root.alpha(root.accentColor, 0.72), Math.max(1, Style.space(1)))
@@ -294,6 +296,10 @@ Panel {
   property string settingsSection: "preferences"
   property bool setupSucceeded: false
   property string setupUrl: "http://homeassistant.local:8123"
+  property string setupAddressScheme: "http"
+  property string setupAddressHost: "homeassistant.local"
+  property string setupAddressPort: "8123"
+  property bool setupAddressSyncing: false
   property string activeHomeAssistantUrl: ""
   property string setupToken: ""
   property string setupError: ""
@@ -310,6 +316,11 @@ Panel {
   ]
 
   function alpha(color, amount) { return Qt.rgba(color.r, color.g, color.b, amount) }
+
+  function latencyColor(value, healthyColor) {
+    var latency = Number(value)
+    return isFinite(latency) && latency > 500 ? root.urgent : healthyColor
+  }
 
   function surfaceColor(value) {
     return root.compactChromeEnabled ? "transparent" : value
@@ -455,6 +466,7 @@ Panel {
       appearance_blur: Number(appearanceBlur),
       appearance_radius: Number(appearanceRadius),
       appearance_compact: compactUiEnabled,
+      appearance_outer_border_enabled: appearanceOuterBorderEnabled,
     }
   }
 
@@ -507,6 +519,8 @@ Panel {
   // The shell's default Tab action moves between panel popouts. When this
   // experimental option is enabled, make the panel's ordinary buttons join
   // the same focus chain as text fields, toggles, and dropdown triggers.
+  // Turning it off restores every temporary focus flag and releases Tab back
+  // to the shell immediately.
   function applyGlobalTabNavigation() {
     var overrides = root.globalTabFocusOverrides || []
     if (!root.globalTabNavigationEnabled) {
@@ -1065,6 +1079,112 @@ Panel {
     return firstAddress !== "" && firstAddress === secondAddress
   }
 
+  function splitHomeAssistantAddress(value) {
+    var text = String(value || "").trim()
+    var scheme = "http"
+    var schemeMatch = text.match(/^([a-z][a-z0-9+.-]*):\/\//i)
+    if (schemeMatch) {
+      scheme = String(schemeMatch[1]).toLowerCase()
+      text = text.slice(schemeMatch[0].length)
+    }
+    if (scheme !== "http" && scheme !== "https") scheme = "http"
+
+    var slash = text.indexOf("/")
+    var authority = slash >= 0 ? text.slice(0, slash) : text
+    var path = slash >= 0 ? text.slice(slash) : ""
+    var host = authority
+    var port = "8123"
+    if (authority.charAt(0) === "[") {
+      var closingBracket = authority.indexOf("]")
+      if (closingBracket > 0) {
+        host = authority.slice(0, closingBracket + 1)
+        var bracketPort = authority.slice(closingBracket + 1)
+        if (bracketPort.indexOf(":") === 0 && /^\d+$/.test(bracketPort.slice(1)))
+          port = bracketPort.slice(1)
+      }
+    } else {
+      var colon = authority.lastIndexOf(":")
+      if (colon > 0 && authority.indexOf(":") === colon
+          && /^\d+$/.test(authority.slice(colon + 1))) {
+        host = authority.slice(0, colon)
+        port = authority.slice(colon + 1)
+      }
+    }
+    return { scheme: scheme, host: host + path, port: port }
+  }
+
+  function setupAddressParts() {
+    var text = String(root.setupAddressHost || "").trim()
+    var scheme = root.setupAddressScheme === "https" ? "https" : "http"
+    if (text.indexOf("://") >= 0) {
+      var parsed = root.splitHomeAssistantAddress(text)
+      scheme = parsed.scheme
+      text = parsed.host
+    }
+
+    var slash = text.indexOf("/")
+    var authority = slash >= 0 ? text.slice(0, slash) : text
+    var path = slash >= 0 ? text.slice(slash) : ""
+    if (authority.charAt(0) === "[") {
+      var closingBracket = authority.indexOf("]")
+      var bracketPort = authority.slice(closingBracket + 1)
+      if (closingBracket > 0 && bracketPort.indexOf(":") === 0
+          && /^\d+$/.test(bracketPort.slice(1)))
+        authority = authority.slice(0, closingBracket + 1)
+    } else {
+      var colon = authority.lastIndexOf(":")
+      if (colon > 0 && authority.indexOf(":") === colon
+          && /^\d+$/.test(authority.slice(colon + 1)))
+        authority = authority.slice(0, colon)
+    }
+    return { scheme: scheme, authority: authority, path: path }
+  }
+
+  function setupAddressIsValid() {
+    var parts = root.setupAddressParts()
+    var portText = String(root.setupAddressPort || "").trim()
+    if (parts.authority === "" || /\s/.test(parts.authority)
+        || /[?#]/.test(parts.path) || /[?#]/.test(parts.authority)) return false
+    if (parts.authority.charAt(0) === "[") {
+      if (parts.authority.indexOf("]") < 0) return false
+    } else if (parts.authority.indexOf(":") >= 0) {
+      // IPv6 addresses must be entered in bracketed form so the port remains
+      // unambiguous in the composed URL.
+      return false
+    }
+    var port = Number(portText)
+    return /^\d+$/.test(portText) && isFinite(port) && port >= 1 && port <= 65535
+  }
+
+  function composeHomeAssistantAddress() {
+    var parts = root.setupAddressParts()
+    if (!root.setupAddressIsValid()) return ""
+    return parts.scheme + "://" + parts.authority + ":"
+      + String(root.setupAddressPort || "").trim() + parts.path.replace(/\/+$/, "")
+  }
+
+  function syncSetupAddressFields(value) {
+    var parsed = root.splitHomeAssistantAddress(value)
+    root.setupAddressSyncing = true
+    root.setupAddressScheme = parsed.scheme
+    root.setupAddressHost = parsed.host
+    root.setupAddressPort = parsed.port || "8123"
+    if (setupHostField) setupHostField.text = root.setupAddressHost
+    if (setupPortField) setupPortField.text = root.setupAddressPort
+    if (reconnectHostField) reconnectHostField.text = root.setupAddressHost
+    if (reconnectPortField) reconnectPortField.text = root.setupAddressPort
+    root.setupAddressSyncing = false
+  }
+
+  function updateSetupUrlFromAddress() {
+    var next = root.composeHomeAssistantAddress()
+    if (next === "") return false
+    root.setupAddressSyncing = true
+    root.setupUrl = next
+    root.setupAddressSyncing = false
+    return true
+  }
+
   readonly property var dropdownOptions: [{
     value: "",
     label: "Choose an air conditioner"
@@ -1103,8 +1223,9 @@ Panel {
     { value: "experimental", label: "EXPERIMENTAL" },
     { value: "maintenance", label: "MAINTENANCE" },
   ])
+  readonly property bool setupAddressValid: root.setupAddressIsValid()
   readonly property bool reconnectCanReuseSavedToken: configured
-    && root.sameHomeAssistantAddress(setupUrl, activeHomeAssistantUrl)
+    && root.sameHomeAssistantAddress(root.composeHomeAssistantAddress(), activeHomeAssistantUrl)
     && String(setupToken || "").trim() === ""
   readonly property bool setupCanSubmit: !setupBusy
     && !preferenceBusy
@@ -1114,7 +1235,7 @@ Panel {
     && !resetAppBusy
     && !uninstallBusy
     && !masterSwitchBusy
-    && String(setupUrl || "").trim() !== ""
+    && root.setupAddressValid
     && String(setupToken || "").trim() !== ""
     && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
   readonly property bool reconnectCanSubmit: !setupBusy
@@ -1125,7 +1246,7 @@ Panel {
     && !resetAppBusy
     && !uninstallBusy
     && !masterSwitchBusy
-    && String(setupUrl || "").trim() !== ""
+    && root.setupAddressValid
     && (String(setupToken || "").trim() !== "" || root.reconnectCanReuseSavedToken)
     && (setupEntityOptions.length === 0 || setupSelectedEntity !== "")
   readonly property string setupActionLabel: setupEntityOptions.length > 0
@@ -1159,7 +1280,7 @@ Panel {
     return root.remoteHistoryConnected ? "CONNECTED" : "UNAVAILABLE"
   }
   readonly property color remoteHistoryStatusColor: root.remoteHistoryConnected
-    ? root.accentColor
+    ? root.latencyColor(root.remoteHistoryPingMs, root.accentColor)
     : root.remoteHistoryStatusText === "CHECKING…" ? root.dim : root.urgent
   readonly property bool barIsOn: connected && multiUnitActive
     ? anyUnitOn() : isOn
@@ -1208,15 +1329,16 @@ Panel {
   readonly property bool showTargetOnBar: temperatureDisplay === "target"
     || temperatureDisplay === "both"
   readonly property bool historyChartVisible: historyEnabled && connected
-  readonly property var historyPoints: {
+  function historyPointsForWindow(windowEnd, hours) {
     var next = []
     if (!connected || !Array.isArray(reading.history)) return next
-    var cutoff = root.historyWindowEnd - Number(historyHours) * 60 * 60
+    var end = Number(windowEnd)
+    var cutoff = end - Number(hours) * 60 * 60
     for (var i = 0; i < reading.history.length; i++) {
       var item = reading.history[i]
       if (!item || !isFinite(Number(item.timestamp)) || !isFinite(Number(item.temperature))) continue
       var timestamp = root.historyTimestamp(item.timestamp)
-      if (timestamp >= cutoff && timestamp <= root.historyWindowEnd + 300) {
+      if (timestamp >= cutoff && timestamp <= end + 300) {
         next.push({
           timestamp: timestamp,
           temperature: root.convertTemperature(
@@ -1228,7 +1350,10 @@ Panel {
     next.sort(function(first, second) { return first.timestamp - second.timestamp })
     return next
   }
-  readonly property string historyHoursLabel: formatHours(historyHours) + " H"
+  readonly property var historyPoints: {
+    var revision = root.historyWindowRevision
+    return root.historyPointsForWindow(root.historyWindowEnd, root.historyHours)
+  }
   readonly property string historyServerLabel: {
     var target = String(remoteHistoryTarget || "").trim()
     if (target === "") return "NOT CONFIGURED"
@@ -1260,13 +1385,21 @@ Panel {
     && historyLogHasSamples && historyPoints.length === 0
     && historyLatestTimestamp > 0
     && historyWindowEnd - historyLatestTimestamp > Number(historyHours) * 60 * 60
+  readonly property real historyChartWindowEnd: historyLogStale
+    && historyLatestTimestamp > 0 ? historyLatestTimestamp : historyWindowEnd
+  readonly property var historyChartPoints: {
+    var revision = root.historyWindowRevision
+    return historyLogStale
+      ? root.historyPointsForWindow(root.historyLatestTimestamp, root.historyHours)
+      : root.historyPoints
+  }
   readonly property real homeAssistantPingMs: {
     var value = Number(reading.ping_ms)
     return isFinite(value) && value >= 0 ? value : -1
   }
   readonly property string historyEmptyMessage: historySource === "server"
     ? (String(reading.history_error || "") !== "" ? "EXTERNAL LOG UNAVAILABLE"
-      : historyLogStale ? "EXTERNAL LOG STALE · UPDATE TIMER"
+      : historyLogStale ? "EXTERNAL LOG STALE · LAST WINDOW UNAVAILABLE"
       : historyLogHasSamples ? "NO READINGS IN SELECTED RANGE" : "WAITING FOR EXTERNAL LOG…")
     : "WAITING FOR LOCAL READINGS…"
   readonly property bool localHomeAssistantConfigured: root.isLocalHomeAssistantUrl(activeHomeAssistantUrl)
@@ -1954,6 +2087,8 @@ Panel {
     appearanceRadiusText = formatAppearanceValue(appearanceRadius)
     compactUiEnabled = parsed.appearance_compact === true
     compactUiEnabledPrevious = compactUiEnabled
+    appearanceOuterBorderEnabled = parsed.appearance_outer_border_enabled !== false
+    appearanceOuterBorderEnabledPrevious = appearanceOuterBorderEnabled
   }
 
   function formatAppearanceValue(value) {
@@ -2081,6 +2216,7 @@ Panel {
     setupToken = ""
     if (root.configured) settingsSection = "preferences"
     if (setupUrl === "") setupUrl = "http://homeassistant.local:8123"
+    root.syncSetupAddressFields(root.setupUrl)
     if (root.configured && root.opened) {
       setupTransitionClosing = false
       setupTransitioning = true
@@ -2089,7 +2225,7 @@ Panel {
     } else {
       setupTransitionClosing = false
       setupOpen = true
-      Qt.callLater(function() { setupUrlField.forceActiveFocus() })
+      Qt.callLater(function() { setupHostField.forceActiveFocus() })
     }
     if (root.configFileModeEnabled)
       root.scheduleConfigFileRefresh()
@@ -2130,11 +2266,15 @@ Panel {
 
   function submitSetup(reconnect) {
     if (reconnect === true ? !root.reconnectCanSubmit : !root.setupCanSubmit) return
+    if (!root.updateSetupUrlFromAddress()) {
+      setupError = "Enter a valid Home Assistant address and port."
+      return
+    }
     setupError = ""
     setupSucceeded = false
     connectionReconnecting = reconnect === true
     setupPayload = JSON.stringify({
-      url: String(setupUrl || "").trim(),
+      url: String(root.setupUrl || "").trim(),
       token: String(setupToken || "").trim(),
       reuse_saved_token: reconnect === true && root.reconnectCanReuseSavedToken,
       entity_id: setupSelectedEntity,
@@ -2181,6 +2321,7 @@ Panel {
   }
 
   function openHomeAssistantSettings() {
+    root.updateSetupUrlFromAddress()
     var url = String(activeHomeAssistantUrl || setupUrl || "").trim()
     if (url === "") {
       remoteHistoryError = "Set the Home Assistant address first."
@@ -2782,6 +2923,8 @@ Panel {
         appearanceRadiusText = "16"
         compactUiEnabled = false
         compactUiEnabledPrevious = false
+        appearanceOuterBorderEnabled = true
+        appearanceOuterBorderEnabledPrevious = true
         remoteHistoryTarget = ""
         remoteHistoryPortText = "22"
         remoteHistoryUrl = root.remoteHistoryDefaultUrl
@@ -2793,7 +2936,7 @@ Panel {
         resetAppConfirming = false
         resetAppError = ""
         resetAppMessage = "Daikin AC Controls was reset. Home Assistant was not changed."
-        Qt.callLater(function() { setupUrlField.forceActiveFocus() })
+        Qt.callLater(function() { setupHostField.forceActiveFocus() })
         return
       }
       resetAppError = parsed && parsed.error
@@ -3741,6 +3884,15 @@ Panel {
     root.beginPreference("appearance_compact", next ? "on" : "off")
   }
 
+  function setAppearanceOuterBorderEnabled(value) {
+    if (preferenceProcess.running) return
+    var next = value === true
+    if (next === appearanceOuterBorderEnabled) return
+    appearanceOuterBorderEnabledPrevious = appearanceOuterBorderEnabled
+    appearanceOuterBorderEnabled = next
+    root.beginPreference("appearance_outer_border_enabled", next ? "on" : "off")
+  }
+
   function setHistoryRange(value, custom, force) {
     if (preferenceProcess.running) return
     var next = normalizeHistoryHours(value)
@@ -3854,6 +4006,8 @@ Panel {
       appearanceRadiusText = formatAppearanceValue(appearanceRadius)
     } else if (kind === "appearance_compact") {
       compactUiEnabled = compactUiEnabledPrevious
+    } else if (kind === "appearance_outer_border_enabled") {
+      appearanceOuterBorderEnabled = appearanceOuterBorderEnabledPrevious
     }
   }
 
@@ -3954,6 +4108,9 @@ Panel {
     } else if (name === "appearance_compact") {
       compactUiEnabled = value === true
       compactUiEnabledPrevious = compactUiEnabled
+    } else if (name === "appearance_outer_border_enabled") {
+      appearanceOuterBorderEnabled = value === true
+      appearanceOuterBorderEnabledPrevious = appearanceOuterBorderEnabled
     } else {
       return false
     }
@@ -4010,6 +4167,8 @@ Panel {
           appearanceRadiusText = formatAppearanceValue(appearanceRadius)
           compactUiEnabled = parsed.appearance_compact === true
           compactUiEnabledPrevious = compactUiEnabled
+          appearanceOuterBorderEnabled = parsed.appearance_outer_border_enabled !== false
+          appearanceOuterBorderEnabledPrevious = appearanceOuterBorderEnabled
           setupError = ""
           return
         } else if (parsed.preference === "advanced_controls" && parsed.value !== undefined) {
@@ -4572,7 +4731,7 @@ Panel {
       root.setupOpen = true
       root.setupTransitionClosing = false
       if (!root.configured) Qt.callLater(function() {
-        if (root.setupOpen && root.setupTransitioning) setupUrlField.forceActiveFocus()
+        if (root.setupOpen && root.setupTransitioning) setupHostField.forceActiveFocus()
       })
       setupTransitionFinishTimer.restart()
     }
@@ -4615,6 +4774,7 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
+      root.syncSetupAddressFields(root.setupUrl)
       root.refresh()
       Qt.callLater(root.applyGlobalTabNavigation)
     } else {
@@ -4631,6 +4791,9 @@ Panel {
     }
   }
 
+  onSetupUrlChanged: {
+    if (!root.setupAddressSyncing) root.syncSetupAddressFields(root.setupUrl)
+  }
   onGlobalTabNavigationEnabledChanged: Qt.callLater(root.applyGlobalTabNavigation)
   onHistoryHoursChanged: historyWindowRevision += 1
   onHistoryChartVisibleChanged: if (historyChartVisible) historyWindowRevision += 1
@@ -4905,14 +5068,25 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: (root.setupOpen && (setupUrlField.activeFocus
-        || setupTokenField.activeFocus || reconnectUrlField.activeFocus
-        || reconnectTokenField.activeFocus || setupEntityDropdown.popupOpen
-        || reconnectEntityDropdown.popupOpen
-        || remoteHistoryTargetField.activeFocus || remoteHistoryPortField.activeFocus
-        || remoteHistoryUrlField.activeFocus || root.configFileModeEnabled
-        || configFileEditor.activeFocus || root.shortcutCaptureActive))
-        || (root.globalTabNavigationEnabled && panel.activeFocusItem
+      // A disabled global-tab switch is a hard off: the catcher cannot see or
+      // consume Tab, and its temporary focus flags have already been restored.
+      blocked: (!root.globalTabNavigationEnabled && !root.configFileModeEnabled)
+        || (root.setupOpen && (setupHostField.activeFocus === true
+          || setupPortField.activeFocus === true
+          || setupTokenField.activeFocus === true
+          || reconnectHostField.activeFocus === true
+          || reconnectPortField.activeFocus === true
+          || reconnectTokenField.activeFocus === true
+          || !!setupEntityDropdown.popupOpen
+          || !!reconnectEntityDropdown.popupOpen
+          || remoteHistoryTargetField.activeFocus === true
+          || remoteHistoryPortField.activeFocus === true
+          || remoteHistoryUrlField.activeFocus === true
+          || root.configFileModeEnabled === true
+          || configFileEditor.activeFocus === true
+          || root.shortcutCaptureActive === true))
+        || (root.globalTabNavigationEnabled === true
+          && !!panel.activeFocusItem
           && panel.activeFocusItem !== keyCatcher)
       onCloseRequested: {
         if (root.setupOpen && root.configured) {
@@ -4924,10 +5098,9 @@ Panel {
       }
       onActivateRequested: root.refresh()
       onTabRequested: function(direction) {
-        // Tab is opt-in. With the experimental switch off, do not turn Tab
-        // into panel switching or any other implicit navigation. Config File
-        // Mode is the one deliberate exception: its own child handlers keep
-        // the editor → apply → reload → toggle order alive.
+        // Tab is opt-in. With the switch off, this catcher is blocked and
+        // ordinary Qt/shell handling remains untouched. Config File Mode is
+        // the one deliberate exception with its own editor action order.
         if (root.globalTabNavigationEnabled) root.focusNextPanelItem(direction)
       }
       onTextKey: function(t) {
@@ -4953,11 +5126,10 @@ Panel {
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function(event) {
           // Text fields and other Qt controls can consume Tab before the
-          // panel key catcher sees it. Keep the Experimental switch
-          // authoritative: disabled means Tab is swallowed, enabled means
-          // the plugin owns the focus chain. Config File Mode deliberately
-          // bypasses this block for its own editor/apply/reload order.
-          if (!root.configFileModeEnabled
+          // panel key catcher sees it. Only intercept it when the explicit
+          // Experimental switch is on; disabled mode must release Tab
+          // completely. Config File Mode has its own action order.
+          if (!root.configFileModeEnabled && root.globalTabNavigationEnabled
               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
             event.accepted = true
             if (root.globalTabNavigationEnabled)
@@ -5252,18 +5424,24 @@ Panel {
                 selectedTextColor: root.foreground
                 font.family: "monospace"
                 font.pixelSize: Style.font.caption
-                padding: Style.space(10)
+                readonly property var editorBorderSpec: Border.flat(
+                  configFileEditor.activeFocus
+                    ? root.controlAccentColor
+                    : root.alpha(root.controlAccentColor, 0.34),
+                  Math.max(1, Style.space(1)))
+                leftPadding: Style.space(10) + Border.left(editorBorderSpec)
+                rightPadding: Style.space(10) + Border.right(editorBorderSpec)
+                topPadding: Style.space(10) + Border.top(editorBorderSpec)
+                bottomPadding: Style.space(10) + Border.bottom(editorBorderSpec)
                 selectByMouse: true
                 persistentSelection: true
                 textFormat: TextEdit.PlainText
                 wrapMode: TextEdit.NoWrap
                 activeFocusOnTab: true
-                background: Rectangle {
+                background: BorderSurface {
                   color: root.alpha(root.appearanceBackgroundColor, 0.88)
                   radius: root.compactRadius
-                  border.color: configFileEditor.activeFocus
-                    ? root.controlAccentColor : root.alpha(root.foreground, 0.12)
-                  border.width: 1
+                  borderSpec: configFileEditor.editorBorderSpec
                 }
                 onTextChanged: {
                   if (!root.configFileEditorSyncing) {
@@ -5497,30 +5675,95 @@ Panel {
               font.letterSpacing: 0.8
             }
 
-            TextField {
-              id: setupUrlField
+            Row {
+              id: setupAddressRow
               width: parent.width
-              enabled: !root.setupBusy && !root.localServerBusy
-              placeholderText: "http://homeassistant.local:8123"
-              text: root.setupUrl
-              foreground: root.foreground
-              accent: root.controlAccentColor
-              font.family: root.fontFamily
-              inputMethodHints: Qt.ImhUrlCharactersOnly
-              selectByMouse: true
-              background: BorderSurface {
-                color: root.controlSurfaceColor(setupUrlField)
-                borderSpec: root.controlSurfaceBorder(setupUrlField)
-                radius: root.compactRadius
+              spacing: Style.space(5)
+
+              Text {
+                id: setupSchemeLabel
+                text: root.setupAddressScheme + "://"
+                color: root.controlAccentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
               }
-              onTextChanged: if (text !== root.setupUrl) root.setupUrl = text
-              onAccepted: setupTokenField.forceActiveFocus()
-              Keys.onEscapePressed: if (root.configured) root.cancelSetup()
+
+              TextField {
+                id: setupHostField
+                width: Math.max(0, setupAddressRow.width
+                  - setupSchemeLabel.implicitWidth - setupPortSeparator.implicitWidth
+                  - setupPortField.width - setupAddressRow.spacing * 3)
+                enabled: !root.setupBusy && !root.localServerBusy
+                placeholderText: "homeassistant.local or 192.168.0.10"
+                text: root.setupAddressHost
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                font.family: root.fontFamily
+                inputMethodHints: Qt.ImhUrlCharactersOnly
+                selectByMouse: true
+                background: BorderSurface {
+                  color: root.controlSurfaceColor(setupHostField)
+                  borderSpec: root.controlSurfaceBorder(setupHostField)
+                  radius: root.compactRadius
+                }
+                onTextChanged: {
+                  if (!root.setupAddressSyncing && text !== root.setupAddressHost)
+                    root.setupAddressHost = text
+                }
+                onEditingFinished: root.updateSetupUrlFromAddress()
+                onAccepted: {
+                  root.updateSetupUrlFromAddress()
+                  setupPortField.forceActiveFocus()
+                }
+                Keys.onEscapePressed: if (root.configured) root.cancelSetup()
+              }
+
+              Text {
+                id: setupPortSeparator
+                text: ":"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              TextField {
+                id: setupPortField
+                width: Style.space(72)
+                enabled: !root.setupBusy && !root.localServerBusy
+                placeholderText: "8123"
+                text: root.setupAddressPort
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                horizontalAlignment: Text.AlignHCenter
+                inputMethodHints: Qt.ImhDigitsOnly
+                maximumLength: 5
+                validator: IntValidator { bottom: 1; top: 65535 }
+                selectByMouse: true
+                background: BorderSurface {
+                  color: root.controlSurfaceColor(setupPortField)
+                  borderSpec: root.controlSurfaceBorder(setupPortField)
+                  radius: root.compactRadius
+                }
+                onTextChanged: {
+                  if (!root.setupAddressSyncing && text !== root.setupAddressPort)
+                    root.setupAddressPort = text
+                }
+                onEditingFinished: root.updateSetupUrlFromAddress()
+                onAccepted: {
+                  root.updateSetupUrlFromAddress()
+                  setupTokenField.forceActiveFocus()
+                }
+              }
             }
 
             Text {
               width: parent.width
-              text: "Enter the server URL, hostname, or IP address with its port. HTTPS and reverse-proxy paths are supported."
+              text: "Enter the Home Assistant hostname or IP address and port. HTTP is the default; HTTPS and reverse-proxy paths are supported."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -6853,9 +7096,9 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: "ROLLING WINDOW · PAST " + root.formatHours(root.historyHours)
-                    + " ENDING NOW"
-                  color: root.accentColor
+                  text: "CURRENT WINDOW · LAST " + root.formatHours(root.historyHours)
+                    + " UP TO NOW"
+                  color: root.historyLogStale ? root.urgent : root.accentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
@@ -6959,8 +7202,8 @@ Panel {
                   opacity: showHistoryDescription ? 1 : 0
                   clip: true
                   text: root.experimentalHistoryEnabled
-                    ? "The graphic shows the past " + root.formatHours(root.historyHours) + " ending now. Extended history includes 7-day, 30-day, and custom ranges. For long recordings, an always-on external server logger is recommended."
-                    : "The graphic shows the past " + root.formatHours(root.historyHours) + " ending now. Local logging needs this PC active; sleep, shutdown, and restart periods remain empty. Extended and custom ranges are in Experimental."
+                    ? "Shows readings from the selected period up to now. Extended history adds 7 days, 30 days, and custom ranges."
+                    : "Shows readings from the selected period up to now. Local logging pauses while this PC sleeps or is off. Extended ranges are in Experimental."
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -7451,8 +7694,8 @@ Panel {
 
               ChromeToggle {
                 width: parent.width
-                label: "Compact UI · remove cards and borders"
-                description: "Use a flatter, tighter layout with clear padding instead of card chrome."
+                label: "Compact UI · flatten inner cards"
+                description: "Use a flatter, tighter layout while keeping the popup outline visible."
                 checked: root.compactUiEnabled
                 enabled: !root.preferenceBusy
                 foreground: root.foreground
@@ -7461,6 +7704,21 @@ Panel {
                 chromeLess: root.compactChromeEnabled
                 compact: root.compactChromeEnabled
                 onClicked: root.setCompactUiEnabled(!root.compactUiEnabled)
+              }
+
+              ChromeToggle {
+                width: parent.width
+                label: "Outer panel border"
+                description: "Show the accent outline around the popup. Turn this off to remove that outline."
+                checked: root.appearanceOuterBorderEnabled
+                enabled: !root.preferenceBusy
+                foreground: root.foreground
+                accent: root.controlAccentColor
+                fontFamily: root.fontFamily
+                chromeLess: root.compactChromeEnabled
+                compact: root.compactChromeEnabled
+                onClicked: root.setAppearanceOuterBorderEnabled(
+                  !root.appearanceOuterBorderEnabled)
               }
 
               ChromeToggle {
@@ -8354,30 +8612,95 @@ Panel {
                 font.letterSpacing: 0.8
               }
 
-              TextField {
-                id: reconnectUrlField
+              Row {
+                id: reconnectAddressRow
                 width: parent.width
-                enabled: root.connectionEditing && !root.setupBusy
-                placeholderText: "http://homeassistant.local:8123"
-                text: root.setupUrl
-                foreground: root.foreground
-                accent: root.controlAccentColor
-                font.family: root.fontFamily
-                inputMethodHints: Qt.ImhUrlCharactersOnly
-                selectByMouse: true
-                background: BorderSurface {
-                  color: root.controlSurfaceColor(reconnectUrlField)
-                  borderSpec: root.controlSurfaceBorder(reconnectUrlField)
-                  radius: root.compactRadius
+                spacing: Style.space(5)
+
+                Text {
+                  id: reconnectSchemeLabel
+                  text: root.setupAddressScheme + "://"
+                  color: root.controlAccentColor
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  anchors.verticalCenter: parent.verticalCenter
                 }
-                onTextChanged: if (text !== root.setupUrl) root.setupUrl = text
-                onAccepted: reconnectTokenField.forceActiveFocus()
-                Keys.onEscapePressed: root.cancelReconnect()
+
+                TextField {
+                  id: reconnectHostField
+                  width: Math.max(0, reconnectAddressRow.width
+                    - reconnectSchemeLabel.implicitWidth - reconnectPortSeparator.implicitWidth
+                    - reconnectPortField.width - reconnectAddressRow.spacing * 3)
+                  enabled: root.connectionEditing && !root.setupBusy
+                  placeholderText: "homeassistant.local or 192.168.0.10"
+                  text: root.setupAddressHost
+                  foreground: root.foreground
+                  accent: root.controlAccentColor
+                  font.family: root.fontFamily
+                  inputMethodHints: Qt.ImhUrlCharactersOnly
+                  selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(reconnectHostField)
+                    borderSpec: root.controlSurfaceBorder(reconnectHostField)
+                    radius: root.compactRadius
+                  }
+                  onTextChanged: {
+                    if (!root.setupAddressSyncing && text !== root.setupAddressHost)
+                      root.setupAddressHost = text
+                  }
+                  onEditingFinished: root.updateSetupUrlFromAddress()
+                  onAccepted: {
+                    root.updateSetupUrlFromAddress()
+                    reconnectPortField.forceActiveFocus()
+                  }
+                  Keys.onEscapePressed: root.cancelReconnect()
+                }
+
+                Text {
+                  id: reconnectPortSeparator
+                  text: ":"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                TextField {
+                  id: reconnectPortField
+                  width: Style.space(72)
+                  enabled: root.connectionEditing && !root.setupBusy
+                  placeholderText: "8123"
+                  text: root.setupAddressPort
+                  foreground: root.foreground
+                  accent: root.controlAccentColor
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  horizontalAlignment: Text.AlignHCenter
+                  inputMethodHints: Qt.ImhDigitsOnly
+                  maximumLength: 5
+                  validator: IntValidator { bottom: 1; top: 65535 }
+                  selectByMouse: true
+                  background: BorderSurface {
+                    color: root.controlSurfaceColor(reconnectPortField)
+                    borderSpec: root.controlSurfaceBorder(reconnectPortField)
+                    radius: root.compactRadius
+                  }
+                  onTextChanged: {
+                    if (!root.setupAddressSyncing && text !== root.setupAddressPort)
+                      root.setupAddressPort = text
+                  }
+                  onEditingFinished: root.updateSetupUrlFromAddress()
+                  onAccepted: {
+                    root.updateSetupUrlFromAddress()
+                    reconnectTokenField.forceActiveFocus()
+                  }
+                }
               }
 
               Text {
                 width: parent.width
-                text: "Use the address of the Home Assistant server you are already connected to."
+                text: "Enter the Home Assistant hostname or IP address and port. HTTP is the default; HTTPS and reverse-proxy paths remain supported."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -9576,26 +9899,25 @@ Panel {
               }
 
               AcButton {
-                width: root.configFileModeEnabled ? Style.space(150) : Style.space(30)
+                width: Style.space(34)
                 height: Style.space(30)
                 iconText: "󰒓"
-                iconSize: root.configFileModeEnabled ? Style.font.caption : Style.font.body
+                iconSize: Style.font.body
                 // Keep the visible key compact; the tooltip contains the
                 // spaced, human-readable version and its enabled state.
-                text: root.configFileModeEnabled ? root.shortcutValue("open_settings") : ""
-                fontSize: root.configFileModeEnabled
-                  ? Math.max(8, Style.font.caption - 1) : Style.font.bodySmall
-                horizontalPadding: root.configFileModeEnabled ? Style.space(6) : Style.space(8)
+                text: ""
+                fontSize: Style.font.bodySmall
+                horizontalPadding: Style.space(6)
                 fontFamily: root.fontFamily
                 foreground: root.foreground
                 accent: root.accentColor
                 background: root.alpha(root.foreground, 0.035)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
-                tooltipText: root.configFileModeEnabled
-                  ? "Open Settings with " + root.openSettingsShortcutDisplay
-                    + (root.openSettingsShortcutActive ? "" : " (keyboard shortcut disabled)")
-                  : "Edit Home Assistant connection"
+                tooltipText: "Open Settings"
+                  + (root.openSettingsShortcutActive
+                    ? " · " + root.openSettingsShortcutDisplay
+                    : " · keyboard shortcut disabled")
                 onClicked: root.openSetup()
               }
             }
@@ -10460,16 +10782,18 @@ Panel {
           opacity: root.historyChartVisible ? 1 : 0
           enabled: root.historyChartVisible
           clip: true
-          points: root.historyPoints
+          points: root.historyChartPoints
           rangeHours: root.historyHours
-          windowEndTimestamp: root.historyWindowEnd
+          windowEndTimestamp: root.historyChartWindowEnd
           unit: root.displayTemperatureUnit
           connected: root.connected
           showLiveIndicator: root.historySource === "server"
-          sourceLabel: root.historySourceLabel
+          sourceLabel: root.historySourceLabel + (root.historyLogStale ? " · STALE" : "")
           emptyMessage: root.historyEmptyMessage
           foreground: root.foreground
           accent: root.accentColor
+          stale: root.historyLogStale
+          warningColor: root.urgent
           background: root.customAppearanceEnabled
             ? root.panelSurface : root.alpha(root.foreground, 0.035)
           borderColor: root.customAppearanceEnabled

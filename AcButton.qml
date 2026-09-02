@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Ui
 
 // The plugin owns this button skin so its selected state follows the
 // appearance accent. Omarchy's stock Button resolves selected-color to the
