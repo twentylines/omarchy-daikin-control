@@ -36,6 +36,35 @@ Item {
   height: implicitHeight
   clip: true
 
+  // The idle button disappears when confirmation opens. Refocus the actual
+  // confirmation action after the split has started so global Tab navigation
+  // remains in this action instead of jumping to the panel's first control.
+  onConfirmingChanged: {
+    if (root.confirming) confirmationFocusTimer.restart()
+    else confirmationFocusTimer.stop()
+  }
+
+  Timer {
+    id: confirmationFocusTimer
+    interval: 16
+    repeat: true
+    property int attempts: 0
+    onTriggered: {
+      attempts += 1
+      if (!root.confirming) {
+        stop()
+        return
+      }
+      if (confirmButton.enabled && splitFrame.splitProgress > 0.02) {
+        confirmButton.forceActiveFocus()
+        stop()
+      } else if (attempts >= 24) {
+        stop()
+      }
+    }
+    onRunningChanged: if (running) attempts = 0
+  }
+
   AcButton {
     id: idleButton
     anchors.fill: parent

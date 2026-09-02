@@ -264,10 +264,10 @@ Item {
           }
 
           Text {
-            // Keep the compact range badge from the original chart. The
-            // settings copy explains that this is a rolling past-X window;
-            // the chart only needs the selected duration here.
-            text: root.formatHours(root.rangeHours) + " H"
+            // formatHours already includes the unit. Keep this badge exactly
+            // as the selected range (for example, "24 H") rather than the
+            // legacy range wording or a duplicated "H H" suffix.
+            text: root.formatHours(root.rangeHours)
             color: root.accent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

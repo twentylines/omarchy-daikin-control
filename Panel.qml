@@ -17,6 +17,7 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME") || ""
+  readonly property string pluginVersion: "0.3.2"
   readonly property string githubUrl: "https://github.com/twentylines/omarchy-daikin-control"
   readonly property string externalHistoryGuideUrl:
     root.githubUrl + "/blob/main/EXTERNAL_SERVER_HISTORY.md"
@@ -75,6 +76,10 @@ Panel {
   ]
   property bool shortcutsEnabled: false
   property bool shortcutsEnabledPrevious: false
+  readonly property string openSettingsShortcutDisplay:
+    root.shortcutDisplay(root.shortcutValue("open_settings"))
+  readonly property bool openSettingsShortcutActive: root.shortcutsEnabled
+    && root.shortcutEnabled("open_settings")
   property bool globalTabNavigationEnabled: false
   property bool globalTabNavigationEnabledPrevious: false
   property var globalTabFocusOverrides: []
@@ -575,19 +580,56 @@ Panel {
       panelScroll.contentY = Math.min(maxY, bottom + margin - panelScroll.height)
   }
 
+  // Confirmation controls replace the button that opened them. Keep keyboard
+  // focus attached to the replacement instead of letting Qt fall back to the
+  // first item in the panel's focus chain while the split animates in.
+  function focusConfirmationItem(item) {
+    if (!item) return
+    confirmationFocusTimer.targetItem = item
+    confirmationFocusTimer.restart()
+  }
+
+  function isPanelFocusDescendant(item, ancestor) {
+    var current = item
+    while (current && current !== panel) {
+      if (current === ancestor) return true
+      current = current.parent
+    }
+    return false
+  }
+
+  function focusReplacementInPanelBranch(item, items, direction) {
+    var ancestor = item ? item.parent : null
+    while (ancestor && ancestor !== panel) {
+      var branch = []
+      for (var i = 0; i < items.length; i++) {
+        if (root.isPanelFocusDescendant(items[i], ancestor)) branch.push(items[i])
+      }
+      if (branch.length > 0)
+        return Number(direction) < 0 ? branch[0] : branch[branch.length - 1]
+      ancestor = ancestor.parent
+    }
+    return null
+  }
+
   function focusNextPanelItem(direction) {
     if (!root.globalTabNavigationEnabled) return false
     var items = root.globalTabFocusItems()
     if (items.length === 0) return false
-    var current = panel.activeFocusItem
+    var focusedItem = panel.activeFocusItem
+    var current = focusedItem
     var index = items.indexOf(current)
     while (index < 0 && current) {
       current = current.parent
       index = items.indexOf(current)
     }
     var step = Number(direction) < 0 ? -1 : 1
-    if (index < 0) index = step > 0 ? -1 : 0
-    var next = items[(index + step + items.length) % items.length]
+    var next = index < 0
+      ? root.focusReplacementInPanelBranch(focusedItem, items, direction) : null
+    if (!next) {
+      if (index < 0) index = step > 0 ? -1 : 0
+      next = items[(index + step + items.length) % items.length]
+    }
     next.forceActiveFocus()
     Qt.callLater(function() { root.ensurePanelFocusVisible(next) })
     return true
@@ -4602,6 +4644,39 @@ Panel {
     }
   }
 
+  onResetAppConfirmingChanged: {
+    if (root.resetAppConfirming) root.focusConfirmationItem(resetConfirmButton)
+  }
+
+  onUninstallConfirmingChanged: {
+    if (root.uninstallConfirming) root.focusConfirmationItem(uninstallBackButton)
+  }
+
+  Timer {
+    id: confirmationFocusTimer
+    interval: 16
+    repeat: true
+    property var targetItem: null
+    property int attempts: 0
+    onRunningChanged: if (running) attempts = 0
+    onTriggered: {
+      attempts += 1
+      var item = targetItem
+      if (!item) {
+        stop()
+        return
+      }
+      if (item.enabled && item.visible && item.opacity > 0.01
+          && item.width > 0 && item.height > 0) {
+        item.forceActiveFocus()
+        root.ensurePanelFocusVisible(item)
+        stop()
+      } else if (attempts >= 24) {
+        stop()
+      }
+    }
+  }
+
   onSetupOpenChanged: {
     if (root.setupOpen && root.configFileModeEnabled) {
       root.scheduleConfigFileRefresh()
@@ -4879,11 +4954,16 @@ Panel {
         Keys.onPressed: function(event) {
           // Text fields and other Qt controls can consume Tab before the
           // panel key catcher sees it. Keep the Experimental switch
-          // authoritative by swallowing Tab in ordinary settings; Config
-          // File Mode deliberately bypasses this gate for its own order.
-          if (!root.configFileModeEnabled && !root.globalTabNavigationEnabled
+          // authoritative: disabled means Tab is swallowed, enabled means
+          // the plugin owns the focus chain. Config File Mode deliberately
+          // bypasses this block for its own editor/apply/reload order.
+          if (!root.configFileModeEnabled
               && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
             event.accepted = true
+            if (root.globalTabNavigationEnabled)
+              root.focusNextPanelItem(
+                (event.modifiers & Qt.ShiftModifier) !== 0
+                  || event.key === Qt.Key_Backtab ? -1 : 1)
             return
           }
           if (event.key === Qt.Key_Escape) {
@@ -4937,6 +5017,17 @@ Panel {
               font.pixelSize: Style.font.bodySmall
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              text: "VERSION " + root.pluginVersion
+              color: root.accentColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 0.8
+              horizontalAlignment: Text.AlignHCenter
             }
           }
         }
@@ -9110,6 +9201,9 @@ Panel {
                       required property var modelData
                       readonly property bool selected: root.uninstallOptionConfirming
                         && root.uninstallMode === modelData.value
+                      onSelectedChanged: {
+                        if (selected) root.focusConfirmationItem(uninstallOptionConfirmButton)
+                      }
                       width: uninstallOptions.width
                       height: selected ? uninstallOptionConfirmation.implicitHeight : Style.space(38)
                       clip: true
@@ -9482,17 +9576,26 @@ Panel {
               }
 
               AcButton {
-                width: Style.space(30)
+                width: root.configFileModeEnabled ? Style.space(150) : Style.space(30)
                 height: Style.space(30)
                 iconText: "󰒓"
-                iconSize: Style.font.body
+                iconSize: root.configFileModeEnabled ? Style.font.caption : Style.font.body
+                // Keep the visible key compact; the tooltip contains the
+                // spaced, human-readable version and its enabled state.
+                text: root.configFileModeEnabled ? root.shortcutValue("open_settings") : ""
+                fontSize: root.configFileModeEnabled
+                  ? Math.max(8, Style.font.caption - 1) : Style.font.bodySmall
+                horizontalPadding: root.configFileModeEnabled ? Style.space(6) : Style.space(8)
                 fontFamily: root.fontFamily
                 foreground: root.foreground
                 accent: root.accentColor
                 background: root.alpha(root.foreground, 0.035)
                 bordered: !root.compactChromeEnabled
                 radius: root.compactRadius
-                tooltipText: "Edit Home Assistant connection"
+                tooltipText: root.configFileModeEnabled
+                  ? "Open Settings with " + root.openSettingsShortcutDisplay
+                    + (root.openSettingsShortcutActive ? "" : " (keyboard shortcut disabled)")
+                  : "Edit Home Assistant connection"
                 onClicked: root.openSetup()
               }
             }

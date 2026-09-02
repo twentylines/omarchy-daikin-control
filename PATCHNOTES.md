@@ -1,5 +1,21 @@
 # Patch Notes
 
+## 0.3.2
+
+- Added a visible `VERSION 0.3.2` marker to the Settings header so the
+  installed build can be identified directly in the plugin.
+- Updated the live chart range badge to show the selected duration directly
+  (`24 H`, `6 H`, and so on), removing the stale `PAST` wording and duplicate
+  unit suffix.
+- In Config File Mode, the panel's settings control now displays the current
+  remappable Open Settings shortcut and its tooltip reports whether that
+  shortcut is active. Clicking it still opens Settings directly.
+- Made Global Tab navigation own the ordinary settings focus chain when it is
+  enabled, while Config File Mode keeps its dedicated editor order.
+- Kept focus inside confirmation flows after activation: MasterSwitch and
+  shared split actions select their confirmation action, Reset selects RESET
+  NOW, and uninstall scope confirmations stay in their selected branch.
+
 ## 0.3.1
 
 - Pushed customisation through every plugin button: selected tabs, choices,
