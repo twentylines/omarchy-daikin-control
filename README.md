@@ -188,7 +188,7 @@ ports, telemetry, or Home Assistant control calls. It creates only the named
 user config, history file, service, and timer. The token-bearing config and
 history are owner-only.
 
-## Optional local Home Assistant
+## Optional local Home Assistant installation
 
 **Set up locally** runs the official Home Assistant Container image with data
 under `~/.local/share/omarchy/homeassistant`. It uses host networking so a
