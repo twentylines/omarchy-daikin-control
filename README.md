@@ -196,6 +196,15 @@ local Daikin integration can discover the AC. After it starts, finish
 Home Assistant onboarding, add the Daikin integration, create a token, and
 connect the plugin.
 
+The installer pins the official Home Assistant image to an immutable registry
+digest instead of following the mutable `stable` tag. To update that pin,
+review the desired Home Assistant release, resolve the official
+Home Assistant stable manifest to its digest, replace the `IMAGE` value in
+`setup-homeassistant.sh`, test the local setup path, and trigger fresh
+marketplace validation for the new commit. Do not restore the mutable tag: a
+tag can change the executable image without a corresponding plugin commit or
+marketplace review.
+
 The container is not removed by normal plugin removal. **Remove everything**
 is the explicit cleanup option for the plugin-managed container and its data;
 unrelated Docker resources are left alone.
