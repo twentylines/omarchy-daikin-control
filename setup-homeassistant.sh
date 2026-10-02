@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly IMAGE="ghcr.io/home-assistant/home-assistant:stable"
+# Keep the optional local Home Assistant runtime tied to one reviewed image
+# manifest. Update this digest only after reviewing the new Home Assistant
+# release and triggering fresh marketplace validation for the resulting commit.
+readonly IMAGE="ghcr.io/home-assistant/home-assistant@sha256:3e6710a7ab2a61311d9d899b719f6c3657791c63e8f4942cec4ebc42401d6b76"
 readonly CONTAINER_NAME="omarchy-homeassistant"
 readonly SERVER_URL="http://127.0.0.1:8123"
 readonly MANAGED_LABEL="io.omarchy.homeassistant-ac.managed"
